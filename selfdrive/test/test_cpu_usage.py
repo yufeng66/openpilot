@@ -15,28 +15,9 @@ def cputime_total(ct):
 
 def print_cpu_usage(first_proc, last_proc):
   procs = [
-    ("selfdrive.controls.controlsd", 45.0),
-    ("./loggerd", 33.90),
-    ("selfdrive.locationd.locationd", 29.5),
-    ("selfdrive.controls.plannerd", 11.84),
-    ("selfdrive.locationd.paramsd", 10.5),
     ("./_modeld", 7.12),
-    ("selfdrive.controls.radard", 9.54),
     ("./camerad", 7.07),
-    ("./_sensord", 6.17),
-    ("./_ui", 5.82),
-    ("./boardd", 3.63),
     ("./_dmonitoringmodeld", 2.67),
-    ("selfdrive.logmessaged", 2.71),
-    ("selfdrive.thermald.thermald", 2.41),
-    ("selfdrive.locationd.calibrationd", 2.0),
-    ("selfdrive.monitoring.dmonitoringd", 1.90),
-    ("./proclogd", 1.54),
-    ("./_gpsd", 0.09),
-    ("./clocksd", 0.02),
-    ("./ubloxd", 0.02),
-    ("selfdrive.tombstoned", 0),
-    ("./logcatd", 0),
   ]
 
   r = True
@@ -65,6 +46,8 @@ def print_cpu_usage(first_proc, last_proc):
 def test_cpu_usage():
   cpu_ok = False
 
+  Params().delete("CarParams")
+  
   # start manager
   manager_path = os.path.join(BASEDIR, "selfdrive/manager.py")
   manager_proc = subprocess.Popen(["python", manager_path])
@@ -75,6 +58,7 @@ def test_cpu_usage():
     start_time = time.monotonic()
     while time.monotonic() - start_time < 210:
       if Params().get("CarParams") is not None:
+        print("\n\nBREAK\n\n")
         break
       time.sleep(2)
 
@@ -99,8 +83,14 @@ if __name__ == "__main__":
   set_params_enabled()
   Params().delete("CarParams")
 
-  passed = False
-  try:
-    passed = test_cpu_usage()
-  finally:
-    sys.exit(int(not passed))
+  for n in range(int(os.getenv("LOOP", "1"))):
+    try:
+      passed = test_cpu_usage()
+      if not passed:
+        raise
+      print("\n\nPASSED RUN ", n, "\n\n")
+      time.sleep(10)
+    except Exception as e:
+      print("\n\nFAILED ON RUN ", n)
+      print(e)
+      sys.exit(n)
