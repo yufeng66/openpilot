@@ -90,7 +90,7 @@ if not prebuilt:
 
     nproc = os.cpu_count()
     j_flag = "" if nproc is None else "-j%d" % (nproc - 1)
-    scons = subprocess.Popen(["scons", j_flag], cwd=BASEDIR, env=env, stderr=subprocess.PIPE)
+    scons = subprocess.Popen(["scons", "-v", j_flag], cwd=BASEDIR, env=env, stderr=subprocess.PIPE)
 
     compile_output = []
 
@@ -233,14 +233,14 @@ if ANDROID:
 car_started_processes = [
   'controlsd',
   'plannerd',
-  'loggerd',
+  #'loggerd',
   'radard',
   'calibrationd',
   'paramsd',
   'camerad',
   'proclogd',
-  'locationd',
-  'clocksd',
+  #'locationd',
+  #'clocksd',
 ]
 
 driver_view_processes = [
@@ -257,21 +257,20 @@ if WEBCAM:
 
 if not PC:
   car_started_processes += [
-    'ubloxd',
-    'sensord',
+    #'ubloxd',
+    #'sensord',
     'dmonitoringd',
     'dmonitoringmodeld',
+    'modeld',
   ]
 
 if ANDROID:
   car_started_processes += [
-    'gpsd',
-    'rtshield',
   ]
 
 # starting dmonitoringmodeld when modeld is initializing can sometimes \
 # result in a weird snpe state where dmon constantly uses more cpu than normal.
-car_started_processes += ['modeld']
+#car_started_processes += ['modeld']
 
 def register_managed_process(name, desc, car_started=False):
   global managed_processes, car_started_processes, persistent_processes
