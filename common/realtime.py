@@ -5,7 +5,7 @@ import time
 import multiprocessing
 
 from common.hardware import PC
-from common.common_pyx import sec_since_boot  # pylint: disable=no-name-in-module, import-error
+from common.clock import sec_since_boot  # pylint: disable=no-name-in-module, import-error
 
 
 # time step for each process
@@ -31,7 +31,7 @@ def set_core_affinity(core):
     os.sched_setaffinity(0, [core,])
 
 
-def config_rt_process(core, priority):
+def config_realtime_process(core, priority):
   gc.disable()
   set_realtime_priority(priority)
   set_core_affinity(core)

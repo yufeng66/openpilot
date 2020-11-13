@@ -13,13 +13,13 @@ from typing import Dict, List
 from selfdrive.swaglog import cloudlog, add_logentries_handler
 
 
-from common.basedir import BASEDIR, PARAMS
+from common.basedir import BASEDIR
 from common.hardware import HARDWARE, ANDROID, PC
 WEBCAM = os.getenv("WEBCAM") is not None
 sys.path.append(os.path.join(BASEDIR, "pyextra"))
 os.environ['BASEDIR'] = BASEDIR
 
-TOTAL_SCONS_NODES = 1005
+TOTAL_SCONS_NODES = 1040
 prebuilt = os.path.exists(os.path.join(BASEDIR, 'prebuilt'))
 
 # Create folders needed for msgq
@@ -78,7 +78,7 @@ import traceback
 from multiprocessing import Process
 
 # Run scons
-spinner = Spinner(noop=(__name__ != "__main__" or not ANDROID))
+spinner = Spinner()
 spinner.update("0")
 
 if not prebuilt:
@@ -138,9 +138,8 @@ if not prebuilt:
         cloudlog.error("scons build failed\n" + error_s)
 
         # Show TextWindow
-        no_ui = __name__ != "__main__" or not ANDROID
         error_s = "\n \n".join(["\n".join(textwrap.wrap(e, 65)) for e in errors])
-        with TextWindow("openpilot failed to build\n \n" + error_s, noop=no_ui) as t:
+        with TextWindow("openpilot failed to build\n \n" + error_s) as t:
           t.wait_for_exit()
 
         exit(1)
@@ -208,9 +207,6 @@ interrupt_processes: List[str] = []
 # processes to end with SIGKILL instead of SIGTERM
 kill_processes = ['sensord']
 
-# processes to end if thermal conditions exceed Green parameters
-green_temp_processes = ['uploader']
-
 persistent_processes = [
   'thermald',
   'logmessaged',
@@ -221,13 +217,10 @@ persistent_processes = [
 
 if not PC:
   persistent_processes += [
+    'updated',
     'logcatd',
     'tombstoned',
-  ]
-
-if ANDROID:
-  persistent_processes += [
-    'updated',
+    'sensord',
   ]
 
 car_started_processes = [
@@ -404,8 +397,10 @@ def cleanup_all_processes(signal, frame):
 
 
 def send_managed_process_signal(name, sig):
-  if name not in running or name not in managed_processes:
+  if name not in running or name not in managed_processes or \
+     running[name].exitcode is not None:
     return
+
   cloudlog.info(f"sending signal {sig} to {name}")
   os.kill(running[name].pid, sig)
 
@@ -484,16 +479,6 @@ def manager_thread():
   while 1:
     msg = messaging.recv_sock(thermal_sock, wait=True)
 
-    # heavyweight batch processes are gated on favorable thermal conditions
-    if msg.thermal.thermalStatus >= ThermalStatus.yellow:
-      for p in green_temp_processes:
-        if p in persistent_processes:
-          kill_managed_process(p)
-    else:
-      for p in green_temp_processes:
-        if p in persistent_processes:
-          start_managed_process(p)
-
     if msg.thermal.freeSpace < 0.05:
       logger_dead = True
 
@@ -552,8 +537,6 @@ def uninstall():
   HARDWARE.reboot(reason="recovery")
 
 def main():
-  os.environ['PARAMS_PATH'] = PARAMS
-
   if ANDROID:
     # the flippening!
     os.system('LD_LIBRARY_PATH="" content insert --uri content://settings/system --bind name:s:user_rotation --bind value:i:1')

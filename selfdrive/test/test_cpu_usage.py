@@ -17,7 +17,7 @@ def print_cpu_usage(first_proc, last_proc):
   procs = [
     #("./_modeld", 7.12),
     ("./camerad", 7.07),
-    ("./_dmonitoringmodeld", 3.0),
+    ("./_dmonitoringmodeld", 3.5),
   ]
 
   r = True
@@ -47,7 +47,7 @@ def test_cpu_usage():
   cpu_ok = False
 
   Params().delete("CarParams")
-  
+
   # start manager
   manager_path = os.path.join(BASEDIR, "selfdrive/manager.py")
   manager_proc = subprocess.Popen(["python", manager_path])
