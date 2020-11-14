@@ -13,7 +13,7 @@ def cputime_total(ct):
   return ct.cpuUser + ct.cpuSystem + ct.cpuChildrenUser + ct.cpuChildrenSystem
 
 
-def print_cpu_usage(first_proc, last_proc):
+def print_cpu_usage(first_proc, last_proc, n):
   procs = [
     #("./_modeld", 7.12),
     ("./camerad", 7.07),
@@ -23,6 +23,7 @@ def print_cpu_usage(first_proc, last_proc):
   r = True
   dt = (last_proc.logMonoTime - first_proc.logMonoTime) / 1e9
   result = "------------------------------------------------\n"
+  simple_result = ""
   for proc_name, normal_cpu_usage in procs:
     try:
       first = [p for p in first_proc.procLog.procs if proc_name in p.cmdline][0]
@@ -36,14 +37,19 @@ def print_cpu_usage(first_proc, last_proc):
         result += f"Warning {proc_name} using less CPU than normal\n"
         r = False
       result += f"{proc_name.ljust(35)}  {cpu_usage:.2f}%\n"
+      simple_result += "%.2f," % cpu_usage
     except IndexError:
       result += f"{proc_name.ljust(35)}  NO METRICS FOUND\n"
+      simple_result += "%.2f," % 999.99
       r = False
   result += "------------------------------------------------\n"
+  simple_result = "%d,%s\n" % (n, simple_result)
   print(result)
+  with open("results.txt", "a+") as f:
+    f.write(simple_result)
   return r
 
-def test_cpu_usage():
+def test_cpu_usage(n):
   cpu_ok = False
 
   Params().delete("CarParams")
@@ -70,7 +76,7 @@ def test_cpu_usage():
     # run for a minute and get last sample
     time.sleep(20)
     last_proc = messaging.recv_sock(proc_sock, wait=True)
-    cpu_ok = print_cpu_usage(first_proc, last_proc)
+    cpu_ok = print_cpu_usage(first_proc, last_proc, n)
   finally:
     manager_proc.terminate()
     ret = manager_proc.wait(20)
@@ -87,11 +93,12 @@ if __name__ == "__main__":
   for n in range(int(os.getenv("LOOP", "1"))):
     try:
       start_t = time.monotonic()
-      passed = test_cpu_usage()
+      passed = test_cpu_usage(n)
       if not passed:
         raise Exception
       print("\n\nPASSED RUN ", n, f", took {time.monotonic()-start_t}s\n\n")
     except Exception as e:
       print("\n\nFAILED ON RUN ", n)
       print(e)
-      sys.exit(n)
+      continue
+      #sys.exit(n)
