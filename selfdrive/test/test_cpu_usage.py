@@ -13,7 +13,7 @@ def cputime_total(ct):
   return ct.cpuUser + ct.cpuSystem + ct.cpuChildrenUser + ct.cpuChildrenSystem
 
 
-def print_cpu_usage(first_proc, last_proc, n):
+def print_cpu_usage(first_proc, last_proc, n, max_dp):
   procs = [
     #("./_modeld", 7.12),
     ("./camerad", 7.07),
@@ -43,7 +43,7 @@ def print_cpu_usage(first_proc, last_proc, n):
       simple_result += "%.2f," % 999.99
       r = False
   result += "------------------------------------------------\n"
-  simple_result = "%d,%s\n" % (n, simple_result)
+  simple_result = "%d,%s%.2f\n" % (n, simple_result, max_dp)
   print(result)
   with open("results.txt", "a+") as f:
     f.write(simple_result)
@@ -59,6 +59,7 @@ def test_cpu_usage(n):
   manager_proc = subprocess.Popen(["python", manager_path])
   try:
     proc_sock = messaging.sub_sock('procLog', conflate=True, timeout=2000)
+    model_sock = messaging.sub_sock('model', conflate=True, timeout=50)
 
     # wait until everything's started
     start_time = time.monotonic()
@@ -73,10 +74,13 @@ def test_cpu_usage(n):
     if first_proc is None:
       raise Exception("\n\nTEST FAILED: progLog recv timed out\n\n")
 
+    first_dropperc = messaging.recv_sock(model_sock, wait=True).model.frameDropPerc
     # run for a minute and get last sample
     time.sleep(20)
     last_proc = messaging.recv_sock(proc_sock, wait=True)
-    cpu_ok = print_cpu_usage(first_proc, last_proc, n)
+    last_dropperc = messaging.recv_sock(model_sock, wait=True).model.frameDropPerc
+    max_dp = max(first_dropperc, last_dropperc)
+    cpu_ok = print_cpu_usage(first_proc, last_proc, n, max_dp)
   finally:
     manager_proc.terminate()
     ret = manager_proc.wait(20)
