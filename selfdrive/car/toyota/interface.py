@@ -186,11 +186,11 @@ class CarInterface(CarInterfaceBase):
       ret.mass = 3800. * CV.LB_TO_KG + STD_CARGO_KG
 
       ret.lateralTuning.init('indi')
-      ret.lateralTuning.indi.innerLoopGain = 4.0
-      ret.lateralTuning.indi.outerLoopGain = 3.0
-      ret.lateralTuning.indi.timeConstant = 1.0
-      ret.lateralTuning.indi.actuatorEffectiveness = 1.0
-      ret.steerActuatorDelay = 0.5
+      ret.lateralTuning.indi.innerLoopGain = 21.0
+      ret.lateralTuning.indi.outerLoopGain = 16.0
+      ret.lateralTuning.indi.timeConstant = 7.0
+      ret.lateralTuning.indi.actuatorEffectiveness = 21.0
+      ret.steerActuatorDelay = 0.3
 
     elif candidate in [CAR.COROLLA_TSS2, CAR.COROLLAH_TSS2]:
       stop_and_go = True
