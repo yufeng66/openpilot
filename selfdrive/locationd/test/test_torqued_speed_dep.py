@@ -54,6 +54,7 @@ def make_mock_CP(fingerprint=None, lat_accel_factor=1.25, friction=0.125):
 class TestSpeedDepConfig:
   """Config-level tests that don't need a TorqueEstimator."""
 
+  @pytest.mark.skipif(SPEED_DEP_FINGERPRINT is None, reason="No cars in speed_dependent.toml")
   def test_speed_dep_config_has_entries(self):
     assert len(SPEED_DEP_CARS) > 0
 
