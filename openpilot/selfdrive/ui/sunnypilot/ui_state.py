@@ -209,6 +209,14 @@ class UIStateSP:
       self.params.remove("ExperimentalMode")
       self.params.remove("DynamicExperimentalControl")
 
+    # Speed-dep torque settings live behind the Enforce-gated torque panel and its
+    # Self-Tune toggle; clear them when a parent turns off so the feature cannot
+    # sit armed while its controls are unreachable.
+    if self.params.get_bool("SpeedDependentTorqueToggle") and not (
+        self.params.get_bool("EnforceTorqueControl") and self.params.get_bool("LiveTorqueParamsToggle")):
+      self.params.remove("SpeedDependentTorqueToggle")
+      self.params.remove("FrictionReduction")
+
     # ICBM: clear if not available or if full longitudinal control is active
     if self.CP_SP is not None:
       if not self.CP_SP.intelligentCruiseButtonManagementAvailable or has_long:

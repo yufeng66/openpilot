@@ -27,7 +27,7 @@ class TorqueEstimatorExt:
   """SP extension mixed into TorqueEstimator via multiple inheritance.
 
   Adds per-speed-bin learning on top of upstream's single-value torqued.
-  Gated by SpeedDependentTorqueToggle (offroad-only).
+  Gated by SpeedDependentTorqueToggle + EnforceTorqueControl (both offroad-only).
 
   Data flow:
     1. torqued calls _on_torque_point() for each quality-filtered sample → routed to speed bin
@@ -51,8 +51,11 @@ class TorqueEstimatorExt:
     self.use_live_torque_params = self._params.get_bool("LiveTorqueParamsToggle")
     self.custom_torque_params = self._params.get_bool("CustomTorqueParams")
     self.torque_override_enabled = self._params.get_bool("TorqueParamsOverrideEnabled")
-    # Independently gated — not restricted by ALLOWED_CARS brand list
+    # Not restricted by ALLOWED_CARS brand list. Requires EnforceTorqueControl:
+    # the speed-dep settings live behind the Enforce-gated torque customization
+    # panel, so the feature must not run while its controls are unreachable.
     self.speed_binned = (self.CP.lateralTuning.which() == 'torque'
+                         and self.enforce_torque_control_toggle
                          and self._params.get_bool("SpeedDependentTorqueToggle"))
     # Defaults — overwritten by TorqueEstimator.__init__ before initialize_custom_params runs
     self.min_bucket_points = RELAXED_MIN_BUCKET_POINTS
@@ -174,17 +177,28 @@ class TorqueEstimatorExt:
 
   def _restore_ext_cache(self, cache_ltp=None):
     """Restores per-bin filter values and points from cache.
-    Reads from Params when cache_ltp is not provided."""
+    Reads from Params when cache_ltp is not provided; that path also requires the
+    global learner's restore key to match (same car, offline baseline, and learner
+    version), so the speed bins live and die with the global cache. Passing
+    cache_ltp directly bypasses the key gate (test seam)."""
     if not self.speed_binned:
       return
     try:
+      from openpilot.selfdrive.locationd.torqued import MIN_FILTER_DECAY, VERSION
       if cache_ltp is None:
         cache = self._params.get("LiveTorqueParameters")
         if not cache:
           return
         with log.Event.from_bytes(cache) as evt:
           cache_ltp = evt.liveTorqueParameters
-      from openpilot.selfdrive.locationd.torqued import MIN_FILTER_DECAY
+        params_cache = self._params.get("CarParamsPrevRoute")
+        if params_cache is None:
+          cloudlog.info("speed-dep: no previous CarParams, restarting learning")
+          return
+        with car.CarParams.from_bytes(params_cache) as cache_CP:
+          if self.get_restore_key(cache_CP, cache_ltp.version) != self.get_restore_key(self.CP, VERSION):
+            cloudlog.info("speed-dep: cache from different car or version, restarting learning")
+            return
       n_bins = len(self.speed_bin_bounds)
       # Reject cache from a different config (e.g. TOML update changed bin centers)
       if not np.allclose(list(cache_ltp.speedBinCenters), self.speed_bin_centers, atol=0.01):
