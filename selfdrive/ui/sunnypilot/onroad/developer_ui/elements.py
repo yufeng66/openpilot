@@ -8,6 +8,7 @@ import numpy as np
 import pyray as rl
 from dataclasses import dataclass
 
+from cereal import log
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -340,6 +341,26 @@ class LatAccelFactorElement:
     value = f"{ltp.latAccelFactorFiltered:.2f}"
     color = rl.Color(0, 255, 0, 255) if ltp.liveValid else rl.WHITE
     return UiElement(value, "L.A.F.", self.unit, color)
+
+
+class SteeringLagElement:
+  def __init__(self):
+    self.unit = "s"
+
+  def update(self, sm, is_metric: bool) -> UiElement:
+    if not sm.recv_frame['liveDelay']:
+      return UiElement("-", "LAG", self.unit, rl.WHITE)
+
+    ld = sm['liveDelay']
+    value = f"{ld.lateralDelay:.3f}"
+    if ld.status == log.LiveDelayData.Status.estimated:
+      color = rl.Color(0, 255, 0, 255)
+    elif ld.status == log.LiveDelayData.Status.invalid:
+      # lagd block std exceeded MAX_LAG_STD; lateralDelay has fallen back to the default
+      color = rl.Color(255, 188, 0, 255)
+    else:
+      color = rl.WHITE
+    return UiElement(value, "LAG", self.unit, color)
 
 
 class SteeringTorqueEpsElement:
