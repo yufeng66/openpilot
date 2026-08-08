@@ -4,6 +4,7 @@ Copyright (c) 2021-, Haibin Wen, sunnypilot, and a number of other contributors.
 This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
+import numpy as np
 import pyray as rl
 from dataclasses import dataclass
 
@@ -242,6 +243,65 @@ class LeadSpeedElement(LeadInfoElement):
     return UiElement(value, "L.S.", self.unit, color)
 
 
+_speed_dep_cfg_cache: dict | None = None
+
+
+def _applied_torque_values(sm) -> tuple[float, float, bool] | None:
+  """Mirrors the speed-dep interpolation in latcontrol_torque_ext so the developer UI
+  shows the values the lateral controller is actually using at the current speed.
+  Returns (latAccelFactor, friction, on_learned_bins), or None when speed-dep is
+  inactive and the display should fall back to the global learner values."""
+  global _speed_dep_cfg_cache
+
+  ltp = sm['liveTorqueParameters']
+  speed_bp = list(ltp.speedBinCenters)
+  if not ltp.useParams or not speed_bp:
+    return None
+
+  factors = list(ltp.speedBinLatAccelFactors)
+  frictions = list(ltp.speedBinFrictions)
+  valid_bp = list(ltp.speedBinValid)
+  if not (len(factors) == len(frictions) == len(valid_bp) == len(speed_bp)):
+    return None
+
+  cfg = _speed_dep_cfg_cache
+  if cfg is None:
+    fingerprint = sm['carParams'].carFingerprint
+    if fingerprint:
+      from opendbc.sunnypilot.car.interfaces import get_speed_dep_config
+      cfg = _speed_dep_cfg_cache = get_speed_dep_config().get(fingerprint, {})
+    else:
+      cfg = {}  # carParams not received yet; use global fallback, don't cache
+
+  seed_lafs = cfg.get('laf_bp')
+  seed_frictions = cfg.get('friction_bp')
+  if (seed_lafs and seed_frictions and
+      len(seed_lafs) == len(speed_bp) and len(seed_frictions) == len(speed_bp)):
+    fallback_factors, fallback_frictions = seed_lafs, seed_frictions
+  else:
+    fallback_factors = [ltp.latAccelFactorFiltered] * len(speed_bp)
+    fallback_frictions = [ltp.frictionCoefficientFiltered] * len(speed_bp)
+
+  laf_bp = [factors[i] if valid_bp[i] else fallback_factors[i] for i in range(len(speed_bp))]
+  fric_bp = [frictions[i] if valid_bp[i] else fallback_frictions[i] for i in range(len(speed_bp))]
+
+  v_ego = sm['carState'].vEgo
+  laf = float(np.interp(v_ego, speed_bp, laf_bp))
+  friction = float(np.interp(v_ego, speed_bp, fric_bp))
+
+  # Bins contributing at this speed (np.interp clamps outside the breakpoint range)
+  if v_ego <= speed_bp[0]:
+    contributing = [0]
+  elif v_ego >= speed_bp[-1]:
+    contributing = [len(speed_bp) - 1]
+  else:
+    hi = next(i for i, s in enumerate(speed_bp) if s >= v_ego)
+    contributing = [hi] if speed_bp[hi] == v_ego else [hi - 1, hi]
+  on_learned = all(valid_bp[i] for i in contributing)
+
+  return laf, friction, on_learned
+
+
 class FrictionCoefficientElement:
   def __init__(self):
     self.unit = ""
@@ -249,6 +309,12 @@ class FrictionCoefficientElement:
   def update(self, sm, is_metric: bool) -> UiElement:
     if ui_state.enforce_torque_control and ui_state.custom_torque_params and ui_state.torque_override_enabled:
       return UiElement(f"{ui_state.torque_override_friction:.3f}", "FRIC.", self.unit, rl.WHITE)
+
+    applied = _applied_torque_values(sm)
+    if applied is not None:
+      _, friction, on_learned = applied
+      color = rl.Color(0, 255, 0, 255) if on_learned else rl.WHITE
+      return UiElement(f"{friction:.3f}", "FRIC.", self.unit, color)
 
     ltp = sm['liveTorqueParameters']
     value = f"{ltp.frictionCoefficientFiltered:.3f}"
@@ -262,10 +328,16 @@ class LatAccelFactorElement:
 
   def update(self, sm, is_metric: bool) -> UiElement:
     if ui_state.enforce_torque_control and ui_state.custom_torque_params and ui_state.torque_override_enabled:
-      return UiElement(f"{ui_state.torque_override_lat_accel_factor:.3f}", "L.A.F.", self.unit, rl.WHITE)
+      return UiElement(f"{ui_state.torque_override_lat_accel_factor:.2f}", "L.A.F.", self.unit, rl.WHITE)
+
+    applied = _applied_torque_values(sm)
+    if applied is not None:
+      laf, _, on_learned = applied
+      color = rl.Color(0, 255, 0, 255) if on_learned else rl.WHITE
+      return UiElement(f"{laf:.2f}", "L.A.F.", self.unit, color)
 
     ltp = sm['liveTorqueParameters']
-    value = f"{ltp.latAccelFactorFiltered:.3f}"
+    value = f"{ltp.latAccelFactorFiltered:.2f}"
     color = rl.Color(0, 255, 0, 255) if ltp.liveValid else rl.WHITE
     return UiElement(value, "L.A.F.", self.unit, color)
 
