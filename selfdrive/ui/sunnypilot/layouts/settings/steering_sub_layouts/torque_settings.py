@@ -64,6 +64,17 @@ class TorqueSettingsLayout(Widget):
       description=lambda: tr("Learns separate torque parameters at different speeds. " +
                              "Improves steering at both low and high speeds for supported cars."),
     )
+    self._friction_reduction = option_item_sp(
+      title=lambda: tr("Friction Reduction"),
+      param="FrictionReduction",
+      description=lambda: tr("Reduces the learned friction used by the controller, which can make steering feel " +
+                             "smoother. Each step lowers the speed-dependent learned friction by 10%. " +
+                             "Adjustable while driving; takes effect within a few seconds."),
+      min_value=0,
+      max_value=9,
+      value_change_step=1,
+      label_callback=(lambda x: tr("Off") if x == 0 else f"-{x * 10}%"),
+    )
     self._custom_tune_toggle = toggle_item_sp(
       param="CustomTorqueParams",
       title=lambda: tr("Enable Custom Tuning"),
@@ -105,6 +116,7 @@ class TorqueSettingsLayout(Widget):
       self._self_tune_toggle,
       self._relaxed_tune_toggle,
       self._speed_dep_toggle,
+      self._friction_reduction,
       self._custom_tune_toggle,
       self._torque_prams_override_toggle,
       self._torque_lat_accel_factor,
@@ -121,6 +133,9 @@ class TorqueSettingsLayout(Widget):
     self._relaxed_tune_toggle.action_item.set_enabled(ui_state.is_offroad() and self._self_tune_toggle.action_item.get_state())
     self._speed_dep_toggle.set_visible(self._self_tune_toggle.action_item.get_state())
     self._speed_dep_toggle.action_item.set_enabled(ui_state.is_offroad())
+    # Friction Reduction stays enabled onroad by design: it is meant to be felt out while driving
+    self._friction_reduction.set_visible(self._self_tune_toggle.action_item.get_state() and
+                                         self._speed_dep_toggle.action_item.get_state())
     self._custom_tune_toggle.action_item.set_enabled(ui_state.is_offroad())
     custom_tune_enabled = self._custom_tune_toggle.action_item.get_state()
     self._torque_prams_override_toggle.set_visible(custom_tune_enabled)

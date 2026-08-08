@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch  # noqa: TID251
 from opendbc.sunnypilot.car.interfaces import get_speed_dep_config
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext import LatControlTorqueExt
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext_override import LatControlTorqueExtOverride
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_dep_helpers import friction_scale
 
 SPEED_DEP_CARS = get_speed_dep_config()
 
@@ -464,6 +465,132 @@ class TestUpdateSpeedDepTorqueFallback:
     LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp)
 
     assert mock_self._speed_dep_active is False
+
+
+class TestNearestLearnedBinFallback:
+  """Without TOML seeds, unlearned bins fall back to the nearest learned bin:
+  the interp table holds learned bins only, so np.interp clamps to the nearest
+  learned value beyond the ends and bridges unlearned gaps. Global values are
+  used only when nothing is learned yet."""
+
+  LEARNED_LAFS = [9.9, 2.39, 2.55, 2.61, 3.12, 3.09, 9.9]  # 9.9 = sentinel, must never be used
+  LEARNED_FRICTIONS = [9.9, 0.113, 0.106, 0.086, 0.076, 0.078, 9.9]
+  EDGE_INVALID = [False, True, True, True, True, True, False]
+
+  @patch(PATCH_GET_SPEED_DEP_CONFIG)
+  def test_edge_bins_extend_nearest_learned(self, mock_get_config):
+    mock_get_config.return_value = {}
+    mock_self = TestUpdateSpeedDepTorqueFallback._make_mock_self(fingerprint='UNKNOWN_CAR')
+    mock_tp = TestUpdateSpeedDepTorqueFallback._make_mock_tp(
+      SAMPLE_SPEED_BP, self.LEARNED_LAFS, self.LEARNED_FRICTIONS, self.EDGE_INVALID,
+      global_laf=2.0, global_fric=0.15)
+
+    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp)
+
+    assert mock_self._speed_dep_speed_bp == SAMPLE_SPEED_BP[1:6]
+    assert mock_self._speed_dep_lat_accel_factor_bp == self.LEARNED_LAFS[1:6]
+    assert mock_self._speed_dep_friction_bp == self.LEARNED_FRICTIONS[1:6]
+
+  @patch(PATCH_GET_SPEED_DEP_CONFIG)
+  def test_controller_clamps_to_nearest_learned_not_global(self, mock_get_config):
+    """End-to-end through the per-frame interpolation: outside the learned span the
+    controller must use the nearest learned bin, not the global value."""
+    mock_get_config.return_value = {}
+    ovr = make_override()
+    ovr.lac_torque = MagicMock()
+    mock_tp = TestUpdateSpeedDepTorqueFallback._make_mock_tp(
+      SAMPLE_SPEED_BP, self.LEARNED_LAFS, self.LEARNED_FRICTIONS, self.EDGE_INVALID,
+      global_laf=2.0, global_fric=0.15)
+    LatControlTorqueExt.update_speed_dep_torque(ovr, mock_tp)
+
+    tp = TorqueParams()
+    ovr._last_vego = 2.0  # below the lowest learned bin (10.0)
+    ovr.update_override_torque_params(tp)
+    assert tp.latAccelFactor == pytest.approx(2.39, abs=1e-4)
+    assert tp.friction == pytest.approx(0.113, abs=1e-4)
+
+    tp = TorqueParams()
+    ovr._last_vego = 45.0  # above the highest learned bin (32.0)
+    ovr.update_override_torque_params(tp)
+    assert tp.latAccelFactor == pytest.approx(3.09, abs=1e-4)
+    assert tp.friction == pytest.approx(0.078, abs=1e-4)
+
+  @patch(PATCH_GET_SPEED_DEP_CONFIG)
+  def test_interior_gap_bridges_learned_neighbors(self, mock_get_config):
+    """An unlearned bin between two learned bins interpolates across them."""
+    mock_get_config.return_value = {}
+    valid = [False, True, False, True, True, True, False]
+    mock_self = TestUpdateSpeedDepTorqueFallback._make_mock_self(fingerprint='UNKNOWN_CAR')
+    mock_tp = TestUpdateSpeedDepTorqueFallback._make_mock_tp(
+      SAMPLE_SPEED_BP, self.LEARNED_LAFS, self.LEARNED_FRICTIONS, valid,
+      global_laf=2.0, global_fric=0.15)
+
+    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp)
+
+    # at the unlearned 15.0 bin center, value bridges the 10.0 and 21.0 learned bins
+    expected = float(np.interp(15.0, [10.0, 21.0], [2.39, 2.61]))
+    got = float(np.interp(15.0, mock_self._speed_dep_speed_bp, mock_self._speed_dep_lat_accel_factor_bp))
+    assert got == pytest.approx(expected, abs=1e-4)
+    assert 9.9 not in mock_self._speed_dep_lat_accel_factor_bp
+    assert 2.0 not in mock_self._speed_dep_lat_accel_factor_bp
+
+
+class TestFrictionReduction:
+  """The Friction Reduction setting scales learned friction only — never TOML
+  seeds, never the global fallback, never latAccelFactor."""
+
+  def test_friction_scale_steps_and_clamping(self):
+    assert friction_scale(0) == pytest.approx(1.0)
+    assert friction_scale(5) == pytest.approx(0.5)
+    assert friction_scale(9) == pytest.approx(0.1)
+    assert friction_scale(-3) == pytest.approx(1.0)
+    assert friction_scale(42) == pytest.approx(0.1)
+
+  @patch(PATCH_GET_SPEED_DEP_CONFIG)
+  def test_reduction_scales_learned_friction_only(self, mock_get_config):
+    mock_get_config.return_value = {}
+    lafs = [2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7]
+    frictions = [0.11, 0.12, 0.13, 0.14, 0.15, 0.16, 0.17]
+    mock_self = TestUpdateSpeedDepTorqueFallback._make_mock_self(fingerprint='UNKNOWN_CAR')
+    mock_tp = TestUpdateSpeedDepTorqueFallback._make_mock_tp(
+      SAMPLE_SPEED_BP, lafs, frictions, [True] * 7)
+
+    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, friction_reduction=5)
+
+    assert mock_self._speed_dep_friction_bp == pytest.approx([f * 0.5 for f in frictions])
+    assert mock_self._speed_dep_lat_accel_factor_bp == pytest.approx(lafs)
+
+  @patch(PATCH_GET_SPEED_DEP_CONFIG)
+  def test_reduction_not_applied_to_global_fallback(self, mock_get_config):
+    mock_get_config.return_value = {}
+    mock_self = TestUpdateSpeedDepTorqueFallback._make_mock_self(fingerprint='UNKNOWN_CAR')
+    mock_tp = TestUpdateSpeedDepTorqueFallback._make_mock_tp(
+      SAMPLE_SPEED_BP, [9.9] * 7, [9.9] * 7, [False] * 7, global_laf=2.0, global_fric=0.15)
+
+    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, friction_reduction=9)
+
+    assert mock_self._speed_dep_friction_bp == pytest.approx([0.15] * 7)
+
+  @patch(PATCH_GET_SPEED_DEP_CONFIG)
+  def test_reduction_spares_toml_seeds(self, mock_get_config):
+    seed_lafs = [2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7]
+    seed_frictions = [0.11, 0.12, 0.13, 0.14, 0.15, 0.16, 0.17]
+    mock_get_config.return_value = {
+      'TEST_CAR': {'speed_bp': SAMPLE_SPEED_BP, 'laf_bp': seed_lafs, 'friction_bp': seed_frictions}
+    }
+    learned_frictions = [0.2] * 7
+    valid = [True, False, True, False, True, False, False]
+    mock_self = TestUpdateSpeedDepTorqueFallback._make_mock_self()
+    mock_tp = TestUpdateSpeedDepTorqueFallback._make_mock_tp(
+      SAMPLE_SPEED_BP, [3.0] * 7, learned_frictions, valid)
+
+    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, friction_reduction=5)
+
+    for i in range(7):
+      if valid[i]:
+        assert mock_self._speed_dep_friction_bp[i] == pytest.approx(0.1), f"learned bin {i} must be scaled"
+      else:
+        assert mock_self._speed_dep_friction_bp[i] == pytest.approx(seed_frictions[i]), f"seed bin {i} must not be scaled"
 
 
 class TestExtrapolationAtBoundaries:

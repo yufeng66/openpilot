@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from cereal import log
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_dep_helpers import build_speed_dep_bp
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 
 
@@ -248,8 +249,10 @@ _speed_dep_cfg_cache: dict | None = None
 
 
 def _applied_torque_values(sm) -> tuple[float, float, bool] | None:
-  """Mirrors the speed-dep interpolation in latcontrol_torque_ext so the developer UI
-  shows the values the lateral controller is actually using at the current speed.
+  """Mirrors the speed-dep interpolation in latcontrol_torque_ext (via the shared
+  build_speed_dep_bp, including nearest-learned-bin fallback and the Friction
+  Reduction scale) so the developer UI shows the values the lateral controller is
+  actually using at the current speed.
   Returns (latAccelFactor, friction, on_learned_bins), or None when speed-dep is
   inactive and the display should fall back to the global learner values."""
   global _speed_dep_cfg_cache
@@ -274,23 +277,18 @@ def _applied_torque_values(sm) -> tuple[float, float, bool] | None:
     else:
       cfg = {}  # carParams not received yet; use global fallback, don't cache
 
-  seed_lafs = cfg.get('laf_bp')
-  seed_frictions = cfg.get('friction_bp')
-  if (seed_lafs and seed_frictions and
-      len(seed_lafs) == len(speed_bp) and len(seed_frictions) == len(speed_bp)):
-    fallback_factors, fallback_frictions = seed_lafs, seed_frictions
-  else:
-    fallback_factors = [ltp.latAccelFactorFiltered] * len(speed_bp)
-    fallback_frictions = [ltp.frictionCoefficientFiltered] * len(speed_bp)
-
-  laf_bp = [factors[i] if valid_bp[i] else fallback_factors[i] for i in range(len(speed_bp))]
-  fric_bp = [frictions[i] if valid_bp[i] else fallback_frictions[i] for i in range(len(speed_bp))]
+  bp_speeds, laf_bp, fric_bp = build_speed_dep_bp(
+    speed_bp, factors, frictions, valid_bp,
+    cfg.get('laf_bp'), cfg.get('friction_bp'),
+    ltp.latAccelFactorFiltered, ltp.frictionCoefficientFiltered,
+    ui_state.friction_reduction)
 
   v_ego = sm['carState'].vEgo
-  laf = float(np.interp(v_ego, speed_bp, laf_bp))
-  friction = float(np.interp(v_ego, speed_bp, fric_bp))
+  laf = float(np.interp(v_ego, bp_speeds, laf_bp))
+  friction = float(np.interp(v_ego, bp_speeds, fric_bp))
 
-  # Bins contributing at this speed (np.interp clamps outside the breakpoint range)
+  # Green only when the original bins governing this speed are learned; speeds riding
+  # a fallback (TOML seed, nearest-bin extension, or global) show white.
   if v_ego <= speed_bp[0]:
     contributing = [0]
   elif v_ego >= speed_bp[-1]:

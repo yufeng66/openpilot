@@ -25,6 +25,7 @@ class ControlsExt(ModelStateBase):
     self.CP = CP
     self.params = params
     self._param_update_time: float = 0.0
+    self.friction_reduction: int = self.params.get("FrictionReduction", return_default=True)
     self.blinker_pause_lateral = BlinkerPauseLateral()
 
     cloudlog.info("controlsd_ext is waiting for CarParamsSP")
@@ -53,6 +54,7 @@ class ControlsExt(ModelStateBase):
 
       if self.CP.lateralTuning.which() == 'torque':
         self.lat_delay = get_lat_delay(self.params, sm["liveDelay"].lateralDelay)
+        self.friction_reduction = self.params.get("FrictionReduction", return_default=True)
 
       self._param_update_time = time.monotonic()
 
@@ -124,4 +126,4 @@ class ControlsExt(ModelStateBase):
         and sm.all_checks(['liveTorqueParameters'])):
       tp = sm['liveTorqueParameters']
       if tp.useParams and hasattr(self.LaC, 'extension'):
-        self.LaC.extension.update_speed_dep_torque(tp)
+        self.LaC.extension.update_speed_dep_torque(tp, self.friction_reduction)
