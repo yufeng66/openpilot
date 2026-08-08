@@ -11,7 +11,7 @@ inherits from NNLC and requires model files to init.
 import numpy as np
 import pytest
 
-from unittest.mock import MagicMock, patch  # noqa: TID251
+from unittest.mock import MagicMock, patch
 from opendbc.sunnypilot.car.interfaces import get_speed_dep_config
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext import LatControlTorqueExt
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext_override import LatControlTorqueExtOverride

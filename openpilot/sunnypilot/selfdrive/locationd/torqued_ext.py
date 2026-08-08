@@ -66,7 +66,7 @@ class TorqueEstimatorExt:
 
     if self.enforce_torque_control_toggle:
       if self._params.get_bool("LiveTorqueParamsRelaxedToggle"):
-        self.min_bucket_points = RELAXED_MIN_BUCKET_POINTS / (10 if decimated else 1)
+        self.min_bucket_points = (RELAXED_MIN_BUCKET_POINTS / (10 if decimated else 1)).tolist()
         self.factor_sanity = 0.5 if decimated else 1.0
         self.friction_sanity = 0.8 if decimated else 1.0
 
@@ -136,7 +136,7 @@ class TorqueEstimatorExt:
     # Seed values: from TOML if configured, otherwise global offline values for all bins
     ref_lafs = cfg.get('laf_bp', [self.offline_latAccelFactor] * n_bins)
     ref_frictions = cfg.get('friction_bp', [self.offline_friction] * n_bins)
-    self.speed_bin_decays = [MIN_FILTER_DECAY] * n_bins
+    self.speed_bin_decays = [float(MIN_FILTER_DECAY)] * n_bins
     self.speed_bin_filtered = [
       {'latAccelFactor': FirstOrderFilter(ref_lafs[i], self.speed_bin_decays[i], DT_MDL),
        'frictionCoefficient': FirstOrderFilter(ref_frictions[i], self.speed_bin_decays[i], DT_MDL)}
@@ -156,7 +156,7 @@ class TorqueEstimatorExt:
     """Create a single speed-bin TorqueBuckets instance.
     Per-bucket minimums are scaled down from the global learner since each
     speed bin sees a fraction of the total data."""
-    scaled_min = np.maximum(self.min_bucket_points // len(self.speed_bin_bounds), 1)
+    scaled_min = np.maximum(np.asarray(self.min_bucket_points) // len(self.speed_bin_bounds), 1)
     return TorqueBuckets(x_bounds=STEER_BUCKET_BOUNDS,
                          min_points=scaled_min,
                          min_points_total=int(scaled_min.sum()),

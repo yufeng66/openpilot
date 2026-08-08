@@ -6,7 +6,7 @@ All tests are driven by config, not hardcoded fingerprints.
 import numpy as np
 import pytest
 
-from unittest.mock import MagicMock, patch  # noqa: TID251
+from unittest.mock import MagicMock, patch
 from opendbc.sunnypilot.car.interfaces import get_speed_dep_config
 from openpilot.selfdrive.locationd.torqued import (
   TorqueEstimator, TorqueBuckets, VERSION, MIN_FILTER_DECAY,
