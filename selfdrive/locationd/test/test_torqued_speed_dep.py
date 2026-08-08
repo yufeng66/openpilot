@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from unittest.mock import MagicMock, patch  # noqa: TID251
+from cereal import car, log
 from opendbc.sunnypilot.car.interfaces import get_speed_dep_config
 from openpilot.selfdrive.locationd.torqued import (
   TorqueEstimator, TorqueBuckets, VERSION, MIN_FILTER_DECAY,
@@ -29,11 +30,17 @@ PATCH_PARAMS = 'openpilot.selfdrive.locationd.torqued.Params'
 PATCH_EXT_PARAMS = 'openpilot.sunnypilot.selfdrive.locationd.torqued_ext.Params'
 
 
-def _setup_ext_mock(mock_ext_params_cls, speed_dep_on):
-  """Configure the torqued_ext Params mock for toggle state."""
+def _setup_ext_mock(mock_ext_params_cls, speed_dep_on, enforce_on=None):
+  """Configure the torqued_ext Params mock for toggle state.
+  EnforceTorqueControl follows speed_dep_on unless overridden: speed-dep
+  requires Enforce since its settings live behind the Enforce-gated panel."""
+  if enforce_on is None:
+    enforce_on = speed_dep_on
   def _get_bool(param):
     if param == "SpeedDependentTorqueToggle":
       return speed_dep_on
+    if param == "EnforceTorqueControl":
+      return enforce_on
     return False
   mock_ext_params_cls.return_value.get_bool.side_effect = _get_bool
   mock_ext_params_cls.return_value.get.return_value = None
@@ -151,6 +158,15 @@ class TestToggleGate:
     if SPEED_DEP_FINGERPRINT:
       est = TorqueEstimator(make_mock_CP(fingerprint=SPEED_DEP_FINGERPRINT))
       assert not est.speed_binned
+
+  @patch(PATCH_EXT_PARAMS)
+  @patch(PATCH_PARAMS)
+  def test_enforce_off_no_speed_bins(self, mock_params_cls, mock_ext):
+    """Speed-dep requires EnforceTorqueControl even with its own toggle on."""
+    mock_params_cls.return_value.get.return_value = None
+    _setup_ext_mock(mock_ext, speed_dep_on=True, enforce_on=False)
+    est = TorqueEstimator(make_mock_CP(fingerprint=NON_SPEED_DEP_FINGERPRINT))
+    assert not est.speed_binned
 
 
 class TestBackwardCompatibility:
@@ -372,6 +388,110 @@ class TestCacheRestore:
     est._restore_ext_cache(cache_ltp)
 
     assert all(d == 200 for d in est.speed_bin_decays)
+
+
+def _make_cache_bytes(version=None, centers=None, lafs=None, frictions=None, n_bins=None):
+  """Serialized log.Event holding a liveTorqueParameters cache blob."""
+  if n_bins is None:
+    n_bins = len(SPEED_BIN_CENTERS)
+  evt = log.Event.new_message()
+  ltp = evt.init('liveTorqueParameters')
+  ltp.version = VERSION if version is None else version
+  ltp.speedBinCenters = [float(c) for c in (SPEED_BIN_CENTERS if centers is None else centers)]
+  ltp.speedBinLatAccelFactors = [float(v) for v in ([2.0 + 0.1 * i for i in range(n_bins)] if lafs is None else lafs)]
+  ltp.speedBinFrictions = [float(v) for v in ([0.2 + 0.01 * i for i in range(n_bins)] if frictions is None else frictions)]
+  ltp.speedBinValid = [True] * n_bins
+  return evt.to_bytes()
+
+
+def _make_prev_cp_bytes(fingerprint=NON_SPEED_DEP_FINGERPRINT, lat_accel_factor=1.25, friction=0.125):
+  """Serialized CarParams as stored in CarParamsPrevRoute."""
+  cp = car.CarParams.new_message()
+  cp.carFingerprint = fingerprint
+  cp.lateralTuning.init('torque')
+  cp.lateralTuning.torque.friction = friction
+  cp.lateralTuning.torque.latAccelFactor = lat_accel_factor
+  return cp.to_bytes()
+
+
+class TestCacheRestoreKeyGate:
+  """The Params-read restore path must honor the global learner's restore key.
+  Uses an unconfigured car (default bins), so these run even with an empty TOML.
+  Seed values are the offline 1.25/0.125 from make_mock_CP."""
+
+  def _build_est(self, mock_ext, cache_bytes, cp_bytes):
+    _setup_ext_mock(mock_ext, speed_dep_on=True)
+
+    def _ext_get(param, **kwargs):
+      if param == "LiveTorqueParameters":
+        return cache_bytes
+      if param == "CarParamsPrevRoute":
+        return cp_bytes
+      return None
+    mock_ext.return_value.get.side_effect = _ext_get
+    return TorqueEstimator(make_mock_CP(fingerprint=NON_SPEED_DEP_FINGERPRINT))
+
+  @patch(PATCH_EXT_PARAMS)
+  @patch(PATCH_PARAMS)
+  def test_restore_accepted_when_key_matches(self, mock_params_cls, mock_ext):
+    mock_params_cls.return_value.get.return_value = None
+    n_bins = len(SPEED_BIN_CENTERS)
+    lafs = [3.0 + 0.1 * i for i in range(n_bins)]
+    frictions = [0.15 + 0.01 * i for i in range(n_bins)]
+    est = self._build_est(mock_ext, _make_cache_bytes(lafs=lafs, frictions=frictions), _make_prev_cp_bytes())
+    for i in range(n_bins):
+      assert est.speed_bin_filtered[i]['latAccelFactor'].x == pytest.approx(lafs[i], abs=1e-4)
+      assert est.speed_bin_filtered[i]['frictionCoefficient'].x == pytest.approx(frictions[i], abs=1e-4)
+
+  @patch(PATCH_EXT_PARAMS)
+  @patch(PATCH_PARAMS)
+  def test_restore_rejected_on_version_mismatch(self, mock_params_cls, mock_ext):
+    mock_params_cls.return_value.get.return_value = None
+    est = self._build_est(mock_ext, _make_cache_bytes(version=VERSION + 1), _make_prev_cp_bytes())
+    assert est.speed_bin_filtered[0]['latAccelFactor'].x == pytest.approx(1.25)
+    assert est.speed_bin_filtered[0]['frictionCoefficient'].x == pytest.approx(0.125)
+
+  @patch(PATCH_EXT_PARAMS)
+  @patch(PATCH_PARAMS)
+  def test_restore_rejected_on_different_car(self, mock_params_cls, mock_ext):
+    """Same default bin centers on every unconfigured car — the key must still reject."""
+    mock_params_cls.return_value.get.return_value = None
+    est = self._build_est(mock_ext, _make_cache_bytes(), _make_prev_cp_bytes(fingerprint='SOME_OTHER_CAR'))
+    assert est.speed_bin_filtered[0]['latAccelFactor'].x == pytest.approx(1.25)
+
+  @patch(PATCH_EXT_PARAMS)
+  @patch(PATCH_PARAMS)
+  def test_restore_rejected_on_changed_offline_values(self, mock_params_cls, mock_ext):
+    """A torque-data update (new offline baseline) must invalidate the bins too."""
+    mock_params_cls.return_value.get.return_value = None
+    est = self._build_est(mock_ext, _make_cache_bytes(), _make_prev_cp_bytes(friction=0.2))
+    assert est.speed_bin_filtered[0]['latAccelFactor'].x == pytest.approx(1.25)
+
+  @patch(PATCH_EXT_PARAMS)
+  @patch(PATCH_PARAMS)
+  def test_restore_rejected_without_prev_carparams(self, mock_params_cls, mock_ext):
+    mock_params_cls.return_value.get.return_value = None
+    est = self._build_est(mock_ext, _make_cache_bytes(), None)
+    assert est.speed_bin_filtered[0]['latAccelFactor'].x == pytest.approx(1.25)
+
+  @patch(PATCH_EXT_PARAMS)
+  @patch(PATCH_PARAMS)
+  def test_direct_pass_bypasses_key_gate(self, mock_params_cls, mock_ext):
+    """Passing cache_ltp directly is the documented test seam: no key check."""
+    mock_params_cls.return_value.get.return_value = None
+    _setup_ext_mock(mock_ext, speed_dep_on=True)
+    est = TorqueEstimator(make_mock_CP(fingerprint=NON_SPEED_DEP_FINGERPRINT))
+    n_bins = len(est.speed_bin_bounds)
+
+    cache_ltp = MagicMock()
+    cache_ltp.speedBinCenters = list(SPEED_BIN_CENTERS)
+    cache_ltp.speedBinLatAccelFactors = [5.0] * n_bins
+    cache_ltp.speedBinFrictions = [0.5] * n_bins
+    cache_ltp.speedBinPoints = []
+
+    est._restore_ext_cache(cache_ltp)
+
+    assert est.speed_bin_filtered[0]['latAccelFactor'].x == pytest.approx(5.0)
 
 
 @pytest.mark.skipif(SPEED_DEP_FINGERPRINT is None, reason="No cars in speed_dependent.toml")
