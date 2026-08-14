@@ -19,6 +19,7 @@ from openpilot.sunnypilot.selfdrive.locationd.torqued_ext import (
   TorqueEstimatorExt, SpeedBinMoment,
   MOMENT_ESS_CAP, MOMENT_MIN_ESS, MOMENT_MIN_XSTD, MOMENT_CACHE_ROW,
   MOMENT_DENSITY_CEILING, MOMENT_DENSITY_FLOOR,
+  MOMENT_MIN_IN_BIN_ESS, MOMENT_MIN_LAT_ACCEL_FACTOR,
 )
 
 # Discover configured cars
@@ -769,9 +770,9 @@ class TestMomentAlgebra:
   def test_density_weight_is_bounded(self):
     mom = SpeedBinMoment(STEER_BUCKET_BOUNDS)
     for _ in range(2000):
-      mom.add(0.05, 0.15, 1.0)          # hammer one bucket
-    rare = mom._density_weight(-0.45)   # a starved bucket
-    common = mom._density_weight(0.05)
+      mom.add(0.05, 0.15, 1.0)               # hammer one bucket
+    rare = mom._density_weight(-0.45, 1.0)   # a starved bucket
+    common = mom._density_weight(0.05, 1.0)
     assert rare <= MOMENT_DENSITY_CEILING
     assert common >= MOMENT_DENSITY_FLOOR
     assert rare > common
@@ -839,6 +840,7 @@ class TestMomentMessageAndCache:
     restored = SpeedBinMoment(STEER_BUCKET_BOUNDS)
     assert restored.load_cache(row)
     assert restored.S == pytest.approx(mom.S)
+    assert restored.S_in == pytest.approx(mom.S_in)
     assert restored.fit(FRICTION_FACTOR)[0] == pytest.approx(mom.fit(FRICTION_FACTOR)[0], rel=1e-9)
     assert np.allclose(restored.dens, mom.dens)
 
@@ -855,6 +857,9 @@ class TestMomentMessageAndCache:
     row = filled.to_cache()
     row[0] = float('nan')
     assert not mom.load_cache(row)
+    inconsistent = filled.to_cache()
+    inconsistent[7] = inconsistent[6] * 2                                  # in-bin weight above total
+    assert not mom.load_cache(inconsistent)
 
   @patch(PATCH_EXT_PARAMS)
   @patch(PATCH_PARAMS)
@@ -911,10 +916,103 @@ class TestMomentSanityClip:
 
     for x, y in _balanced_points(slope=3.5, noise=0.01, seed=23):
       est._on_torque_point(x, y, 32.0)
-    results = est._estimate_params_speed_binned()
+    # the output filter ramps toward the clipped fit; iterate until converged
+    for _ in range(400):
+      results = est._estimate_params_speed_binned()
 
     fitted = [i for i, valid in results if valid]
-    assert fitted, "feeding at 32 m/s should make at least the nearby bins fit"
+    assert fitted, "feeding at 32 m/s must make that bin fit"
     for i in fitted:
       assert 2.0 <= est.speed_bin_filtered[i]['latAccelFactor'].x <= 2.2
       assert 0.05 <= est.speed_bin_filtered[i]['frictionCoefficient'].x <= 0.15
+
+  @patch(PATCH_EXT_PARAMS)
+  @patch(PATCH_PARAMS)
+  def test_lat_accel_factor_floored_above_zero(self, mock_params_cls, mock_ext):
+    """Relaxed sanity gives a 0.0 lower clip bound, but latAccelFactor is a divisor
+    in the controller: the moment path must never converge to it."""
+    mock_params_cls.return_value.get.return_value = None
+    _setup_ext_mock(mock_ext, speed_dep_on=True, moment_on=True)
+    est = _make_moment_est()
+    n = len(SPEED_BIN_BOUNDS)
+    est.speed_bin_lat_accel_factor_bounds = [(0.0, 4.0)] * n   # relaxed-shaped window
+
+    # degenerate data: negative slope, so the raw clip target is the 0.0 bound
+    for x, y in _balanced_points(slope=-1.0, noise=0.01, seed=37):
+      est._on_torque_point(x, y, 32.0)
+    for _ in range(400):
+      est._estimate_params_speed_binned()
+
+    for i in range(n):
+      if est.speed_bin_moments[i].S > 0.0:
+        assert est.speed_bin_filtered[i]['latAccelFactor'].x >= MOMENT_MIN_LAT_ACCEL_FACTOR - 1e-6
+
+  @patch(PATCH_EXT_PARAMS)
+  @patch(PATCH_PARAMS)
+  def test_first_fit_ramps_instead_of_stepping(self, mock_params_cls, mock_ext):
+    """One estimate pass must move the applied value only a filter step toward the
+    fit, not jump to it — the transition the point path's low-pass also smooths."""
+    mock_params_cls.return_value.get.return_value = None
+    _setup_ext_mock(mock_ext, speed_dep_on=True, moment_on=True)
+    est = _make_moment_est()
+    n = len(SPEED_BIN_BOUNDS)
+    est.speed_bin_lat_accel_factor_bounds = [(1.0, 4.0)] * n
+    target = SPEED_BIN_CENTERS.index(32.0)
+    seed = est.speed_bin_filtered[target]['latAccelFactor'].x
+
+    for x, y in _balanced_points(slope=3.5, noise=0.01, seed=41):
+      est._on_torque_point(x, y, 32.0)
+    est._estimate_params_speed_binned()
+    after_one = est.speed_bin_filtered[target]['latAccelFactor'].x
+    assert abs(after_one - seed) < 0.2 * abs(3.5 - seed), "single pass must not step to the fit"
+
+    for _ in range(400):
+      est._estimate_params_speed_binned()
+    assert est.speed_bin_filtered[target]['latAccelFactor'].x == pytest.approx(3.5, abs=0.05)
+
+
+class TestMomentSampleGates:
+  @patch(PATCH_EXT_PARAMS)
+  @patch(PATCH_PARAMS)
+  def test_below_min_speed_points_rejected(self, mock_params_cls, mock_ext):
+    """Parking/creep points reach the hook (upstream has no lower speed gate there)
+    but must not feed any bin — the point store drops them implicitly."""
+    mock_params_cls.return_value.get.return_value = None
+    _setup_ext_mock(mock_ext, speed_dep_on=True, moment_on=True)
+    est = _make_moment_est()
+    for vego in (0.0, 2.0, 4.99):
+      est._on_torque_point(0.1, 0.3, vego)
+    assert all(m.S == 0.0 for m in est.speed_bin_moments)
+    est._on_torque_point(0.1, 0.3, est.speed_bin_bounds[0][0])
+    assert est.speed_bin_moments[0].S > 0.0
+
+  @patch(PATCH_EXT_PARAMS)
+  @patch(PATCH_PARAMS)
+  def test_neighbour_only_data_cannot_validate(self, mock_params_cls, mock_ext):
+    """A bin's fitted value may be neighbour-informed, but validity needs at least
+    some data from the bin's own speed range."""
+    mock_params_cls.return_value.get.return_value = None
+    _setup_ext_mock(mock_ext, speed_dep_on=True, moment_on=True)
+    est = _make_moment_est()
+    target = SPEED_BIN_CENTERS.index(32.0)
+    # 26 m/s sits in the 26.5 bin; the 32 bin only sees it through the kernel
+    for _ in range(30):
+      for x, y in _balanced_points(n_per_bucket=5, slope=3.0, noise=0.02, seed=29):
+        est._on_torque_point(x, y, 26.0)
+    valid = dict(est._estimate_params_speed_binned())
+    assert est.speed_bin_moments[target].S >= MOMENT_MIN_ESS, "kernel must still feed the neighbour bin"
+    assert est.speed_bin_moments[target].S_in == 0.0
+    assert not valid[target]
+    assert valid[SPEED_BIN_CENTERS.index(26.5)]
+
+  def test_small_steer_data_cannot_validate(self):
+    """Cruise-only steer (|x| < 0.15) passes the spread check but must fail inner
+    steer-bucket coverage — point mode would never validate on it either."""
+    mom = SpeedBinMoment(STEER_BUCKET_BOUNDS)
+    rng = np.random.default_rng(31)
+    for _ in range(500):
+      x = float(rng.uniform(-0.15, 0.15))
+      mom.add(x, 3.0 * x + float(rng.normal(0, 0.02)), 1.0)
+    assert mom.S >= MOMENT_MIN_ESS and mom.S_in >= MOMENT_MIN_IN_BIN_ESS
+    assert mom.x_std() >= MOMENT_MIN_XSTD
+    assert not mom.is_valid()

@@ -38,8 +38,17 @@ MOMENT_DENSITY_FLOOR = 0.1      # min down-weight for over-represented steer ran
 MOMENT_SPEED_KERNEL_H = 3.0     # m/s, Gaussian speed kernel width
 MOMENT_KERNEL_MIN = 0.01        # ignore bins further than ~3 kernel widths away
 MOMENT_MIN_ESS = 60.0           # readiness: accumulated weight
+MOMENT_MIN_IN_BIN_ESS = 15.0    # readiness: weight that came from the bin's own speed range
+MOMENT_MIN_BUCKET_ESS = 3.0     # readiness: weight in every inner steer bucket (edges exempt, like relaxed)
 MOMENT_MIN_XSTD = 0.06          # readiness: steer spread, i.e. the fit is identifiable
-MOMENT_CACHE_ROW = 15           # 6 unique moments + total weight + 8 density counters
+# Output smoothing and clip floor for the applied fit. The filter decay is in
+# FirstOrderFilter's rc units (dt=DT_MDL) but the estimate runs at 4 Hz, so the
+# wall-clock ramp is ~5x the rc: rc=1.0 -> ~5 s. The floor exists because
+# latAccelFactor is a divisor in the controller and the relaxed sanity window's
+# lower clip bound is (1 - 1.0) * seed = 0.0.
+MOMENT_FILTER_DECAY = 1.0
+MOMENT_MIN_LAT_ACCEL_FACTOR = 0.5
+MOMENT_CACHE_ROW = 16           # 6 unique moments + S + S_in + 8 density counters
 
 
 class SpeedBinMoment:
@@ -50,7 +59,7 @@ class SpeedBinMoment:
   identically the smallest eigenvector of A^T A. So the fit only ever needed the 3x3
   moment matrix, never the points — friction (the spread perpendicular to the fitted
   line) falls out of the same moments. That makes this O(1) in memory: ~10k stored
-  points per bin collapse to 15 floats.
+  points per bin collapse to MOMENT_CACHE_ROW floats.
 
   Forgetting is data-clocked. Once the accumulated weight reaches ess_cap the whole
   matrix is rescaled, which is exactly an exponential moving average over the rank-1
@@ -68,34 +77,40 @@ class SpeedBinMoment:
     self.density_ceiling = float(density_ceiling)
     self.M = np.zeros((3, 3))
     self.S = 0.0
+    self.S_in = 0.0  # weight that came from inside this bin's own speed range
     self.dens = np.zeros(len(self.bounds))
 
-  def _density_weight(self, steer):
+  def _density_weight(self, steer, kernel_weight):
     """Continuous replacement for upstream's fixed-capacity steer buckets: weight a
-    point by how under-represented its steer range currently is. Returns 0 outside
-    the tracked range, which upstream drops as well."""
+    point by how under-represented its steer range currently is. Counters advance
+    by the kernel weight, so a far-speed point claims proportionally less
+    representation of its steer range. Returns 0 outside the tracked range, which
+    upstream drops as well."""
     for i, (lo, hi) in enumerate(self.bounds):
       if lo <= steer < hi:
         total = self.dens.sum()
         mean_d = total / len(self.dens) if total > 0 else 1.0
         w = float(np.clip(mean_d / max(self.dens[i], 0.5),
                           MOMENT_DENSITY_FLOOR, self.density_ceiling))
-        self.dens[i] += 1.0
+        self.dens[i] += kernel_weight
         if self.dens.sum() > self.ess_cap:
           self.dens *= self.ess_cap / self.dens.sum()
         return w
     return 0.0
 
-  def add(self, steer, lateral_acc, kernel_weight):
-    w = self._density_weight(steer) * kernel_weight
+  def add(self, steer, lateral_acc, kernel_weight, in_bin=True):
+    w = self._density_weight(steer, kernel_weight) * kernel_weight
     if w <= 0.0:
       return
     p = np.array([steer, 1.0, lateral_acc])
     self.M += w * np.outer(p, p)
     self.S += w
+    if in_bin:
+      self.S_in += w
     if self.S > self.ess_cap:
       f = self.ess_cap / self.S
       self.M *= f
+      self.S_in *= f
       self.S = self.ess_cap
 
   def x_std(self):
@@ -105,8 +120,15 @@ class SpeedBinMoment:
     return math.sqrt(max(m[0, 0] - m[0, 1] ** 2, 0.0))
 
   def is_valid(self):
-    """Enough evidence, and enough steer spread for the slope to be identifiable."""
-    return self.S >= MOMENT_MIN_ESS and self.x_std() >= MOMENT_MIN_XSTD
+    """Mirrors point-mode validity invariants: enough total evidence, at least some
+    evidence from inside the bin's own speed range (so a bin cannot go valid on
+    neighbour-speed data alone and override a per-car seed), enough steer spread
+    for the slope to be identifiable, and coverage of every inner steer bucket
+    (edges exempt, matching the relaxed min-bucket profile). The fitted value stays
+    neighbour-informed either way — this only gates when it is applied."""
+    if self.S < MOMENT_MIN_ESS or self.S_in < MOMENT_MIN_IN_BIN_ESS or self.x_std() < MOMENT_MIN_XSTD:
+      return False
+    return bool((self.dens[1:-1] >= MOMENT_MIN_BUCKET_ESS).all())
 
   def fit(self, friction_factor):
     """Returns (latAccelFactor, frictionCoefficient), or None if not identifiable.
@@ -140,20 +162,25 @@ class SpeedBinMoment:
     a reboot does not hand the first few points the full rare-range up-weight."""
     return [float(self.M[0, 0]), float(self.M[0, 1]), float(self.M[0, 2]),
             float(self.M[1, 1]), float(self.M[1, 2]), float(self.M[2, 2]),
-            float(self.S)] + [float(d) for d in self.dens]
+            float(self.S), float(self.S_in)] + [float(d) for d in self.dens]
 
   def load_cache(self, row):
     row = list(row)
-    if len(row) != MOMENT_CACHE_ROW or len(self.dens) != MOMENT_CACHE_ROW - 7:
+    # Width is derived from the bucket count, so a change to STEER_BUCKET_BOUNDS
+    # (or to the row layout) invalidates old caches instead of misreading them.
+    if len(row) != 8 + len(self.bounds):
       return False
     if not all(math.isfinite(v) for v in row):
       return False
-    m00, m01, m02, m11, m12, m22, s = row[:7]
+    m00, m01, m02, m11, m12, m22, s, s_in = row[:8]
     if s <= 0.0 or s > self.ess_cap * 1.01:
+      return False
+    if s_in < 0.0 or s_in > s * 1.01:
       return False
     self.M = np.array([[m00, m01, m02], [m01, m11, m12], [m02, m12, m22]])
     self.S = float(s)
-    self.dens = np.array(row[7:], dtype=float)
+    self.S_in = float(s_in)
+    self.dens = np.array(row[8:], dtype=float)
     return True
 
 class TorqueEstimatorExt:
@@ -321,10 +348,16 @@ class TorqueEstimatorExt:
     if not self.speed_binned:
       return
     if self.moment_learner:
-      for i, center in enumerate(self.speed_bin_centers):
+      # Match the point-store acceptance envelope. Upstream calls this hook with
+      # no lower speed limit, and below the lowest bound (parking/creep) the
+      # steer→lat-accel relation leaves the regime the fit models — the point
+      # store drops those samples implicitly because no bin covers them.
+      if not (self.speed_bin_bounds[0][0] <= vego < self.speed_bin_bounds[-1][1]):
+        return
+      for center, (lo, hi), mom in zip(self.speed_bin_centers, self.speed_bin_bounds, self.speed_bin_moments, strict=True):
         k = math.exp(-0.5 * ((vego - center) / MOMENT_SPEED_KERNEL_H) ** 2)
         if k >= MOMENT_KERNEL_MIN:
-          self.speed_bin_moments[i].add(steer, lateral_acc, k)
+          mom.add(steer, lateral_acc, k, in_bin=lo <= vego < hi)
       return
     for i, (lo, hi) in enumerate(self.speed_bin_bounds):
       if lo <= vego < hi:
@@ -368,12 +401,14 @@ class TorqueEstimatorExt:
         if len(cache_ltp.speedBinPoints) == n_bins:
           for i in range(n_bins):
             rows = cache_ltp.speedBinPoints[i]
+            # Point rows are [steer, latAccel] pairs; a moment cache is a single
+            # wider row. A cache written by the other mode (or an older row
+            # layout — load_cache checks the exact width) is silently dropped
+            # and the bin relearns from the restored seed.
             if self.moment_learner:
-              # Only accept a moment cache; a point cache from the other mode is
-              # silently dropped and the bin relearns from the restored seed.
-              if len(rows) == 1 and len(rows[0]) == MOMENT_CACHE_ROW:
+              if len(rows) == 1 and len(rows[0]) > 2:
                 self.speed_bin_moments[i].load_cache(rows[0])
-            elif not any(len(r) == MOMENT_CACHE_ROW for r in rows):
+            elif all(len(r) == 2 for r in rows):
               self.speed_bin_points[i].load_points(rows)
         # self.decay doesn't exist yet at init time (set by upstream reset()), fallback is intentional
         self.speed_bin_decays = [getattr(self, 'decay', MIN_FILTER_DECAY)] * n_bins
@@ -384,23 +419,28 @@ class TorqueEstimatorExt:
   def _estimate_params_moment(self):
     """Fit each bin straight from its moment matrix.
 
-    No output low-pass here: the ESS window already does the smoothing, in the data
-    domain rather than on the parameter. Adding upstream's FirstOrderFilter on top
-    would throw away the convergence advantage that motivates this path, so the
-    sanity-clipped fit is written to the filter's value directly."""
+    Long-horizon smoothing happens in the data domain via the ESS window, but the
+    output still goes through the bin's FirstOrderFilter with a short dedicated
+    decay (~5 s wall-clock at the 4 Hz estimate cadence): it ramps the transition
+    when a bin first validates or re-validates instead of stepping the live
+    steering gain between two 250 ms messages, and it keeps any single degenerate
+    fit from being applied whole. The filter is also fed while the bin is not yet
+    valid, so by the time the valid flag flips the filtered value has already
+    converged near the fit and the fallback→learned switch is seamless.
+
+    latAccelFactor is additionally floored: it is a divisor in the controller,
+    and the relaxed sanity window's lower clip bound is 0.0."""
     from openpilot.selfdrive.locationd.torqued import STEER_BUCKET_BOUNDS, FRICTION_FACTOR
 
     results = []
     for i, mom in enumerate(self.speed_bin_moments):
-      if not mom.is_valid():
-        results.append((i, False))
-        continue
-
-      fit = mom.fit(FRICTION_FACTOR)
+      valid = mom.is_valid()
+      fit = mom.fit(FRICTION_FACTOR) if mom.S > 0.0 else None
       if fit is None:
-        # Ill-conditioned despite enough evidence: drop this bin's history and rebuild.
-        cloudlog.warning(f"speed-dep moment: bin {i} not identifiable with valid weight, resetting bin")
-        self.speed_bin_moments[i] = SpeedBinMoment(STEER_BUCKET_BOUNDS)
+        if valid:
+          # Ill-conditioned despite enough evidence: drop this bin's history and rebuild.
+          cloudlog.warning(f"speed-dep moment: bin {i} not identifiable with valid weight, resetting bin")
+          self.speed_bin_moments[i] = SpeedBinMoment(STEER_BUCKET_BOUNDS)
         self._speed_bin_last_valid[i] = False
         results.append((i, False))
         continue
@@ -408,10 +448,14 @@ class TorqueEstimatorExt:
       slope, friction_coeff = fit
       factor_lo, factor_hi = self.speed_bin_lat_accel_factor_bounds[i]
       fric_lo, fric_hi = self.speed_bin_friction_bounds[i]
-      self.speed_bin_filtered[i]['latAccelFactor'].x = float(np.clip(slope, factor_lo, factor_hi))
-      self.speed_bin_filtered[i]['frictionCoefficient'].x = float(np.clip(friction_coeff, fric_lo, fric_hi))
-      self._speed_bin_last_valid[i] = True
-      results.append((i, True))
+      factor_lo = max(factor_lo, MOMENT_MIN_LAT_ACCEL_FACTOR)
+      factor_hi = max(factor_hi, factor_lo)
+      for key, value, lo, hi in (('latAccelFactor', slope, factor_lo, factor_hi),
+                                 ('frictionCoefficient', friction_coeff, fric_lo, fric_hi)):
+        self.speed_bin_filtered[i][key].update_alpha(MOMENT_FILTER_DECAY)
+        self.speed_bin_filtered[i][key].update(float(np.clip(value, lo, hi)))
+      self._speed_bin_last_valid[i] = valid
+      results.append((i, valid))
     return results
 
   def _estimate_params_speed_binned(self):
