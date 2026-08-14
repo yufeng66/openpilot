@@ -338,7 +338,10 @@ class Device(DeviceSP):
     self._set_awake(ui_state.ignition or not interaction_timeout or PC)
 
   def _set_awake(self, on: bool, _ui_state=None):
-    if on != self._awake:
+    # While the screensaver blocks the sleep transition, _awake stays True, so
+    # wake events (ignition, touch) would not register as a transition — route
+    # them through anyway so DeviceSP can dismiss the screensaver.
+    if on != self._awake or self._blocked_by_screensaver:
       super()._set_awake(on, _ui_state or ui_state)
       if self._blocked_by_screensaver:
         return

@@ -254,12 +254,27 @@ class DeviceSP:
     self._blocked_by_screensaver: bool = False
 
   def _set_awake(self, on: bool, _ui_state=None):
+    if on:
+      # Waking (ignition on, touch): the screensaver can still be up because it
+      # blocks the sleep transition (Device._awake never went False), or stranded
+      # if ScreenSaverEnabled was turned off while it was showing. Never leave it
+      # covering the UI once the device is awake — pop it wherever it sits in the
+      # stack, not just on top, so a dialog pushed above it cannot bury it.
+      if gui_app.widget_in_stack(_ui_state.screensaver):
+        gui_app.pop_widget(gui_app._nav_stack.index(_ui_state.screensaver))
+      self._blocked_by_screensaver = False
+      return
+
+    entering_sleep = not self._blocked_by_screensaver
     self._blocked_by_screensaver = False
 
-    if _ui_state.boot_offroad_mode == 1 and not on:
+    # Only on the sleep transition itself: while the screensaver holds the
+    # transition open this method re-runs every frame, and a Params write per
+    # frame would wear the flash.
+    if _ui_state.boot_offroad_mode == 1 and entering_sleep:
       _ui_state.params.put_bool("OffroadMode", True)
 
-    if not on and _ui_state.screensaver_enabled:
+    if _ui_state.screensaver_enabled:
       if _ui_state.screensaver.was_dismissed:
         if gui_app.get_active_widget() == _ui_state.screensaver:
           gui_app.pop_widget()
