@@ -64,6 +64,13 @@ class TorqueSettingsLayout(Widget):
       description=lambda: tr("Learns separate torque parameters at different speeds. " +
                              "Improves steering at both low and high speeds for supported cars."),
     )
+    self._moment_learner_toggle = toggle_item_sp(
+      param="SpeedDependentTorqueMomentToggle",
+      title=lambda: tr("Moment-Matrix Learner (Experimental)"),
+      description=lambda: tr("Replaces the speed-dependent learner's stored sample buckets with a running " +
+                             "moment matrix. Learns each speed range faster, and lets the highest speed " +
+                             "range be informed by neighbouring speeds instead of waiting to fill on its own."),
+    )
     self._friction_reduction = option_item_sp(
       title=lambda: tr("Friction Reduction"),
       param="FrictionReduction",
@@ -116,6 +123,7 @@ class TorqueSettingsLayout(Widget):
       self._self_tune_toggle,
       self._relaxed_tune_toggle,
       self._speed_dep_toggle,
+      self._moment_learner_toggle,
       self._friction_reduction,
       self._custom_tune_toggle,
       self._torque_prams_override_toggle,
@@ -133,6 +141,9 @@ class TorqueSettingsLayout(Widget):
     self._relaxed_tune_toggle.action_item.set_enabled(ui_state.is_offroad() and self._self_tune_toggle.action_item.get_state())
     self._speed_dep_toggle.set_visible(self._self_tune_toggle.action_item.get_state())
     self._speed_dep_toggle.action_item.set_enabled(ui_state.is_offroad())
+    self._moment_learner_toggle.set_visible(self._self_tune_toggle.action_item.get_state() and
+                                            self._speed_dep_toggle.action_item.get_state())
+    self._moment_learner_toggle.action_item.set_enabled(ui_state.is_offroad())
     # Friction Reduction stays enabled onroad by design: it is meant to be felt out while driving
     self._friction_reduction.set_visible(self._self_tune_toggle.action_item.get_state() and
                                          self._speed_dep_toggle.action_item.get_state())

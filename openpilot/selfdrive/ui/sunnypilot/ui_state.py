@@ -216,6 +216,11 @@ class UIStateSP:
         self.params.get_bool("EnforceTorqueControl") and self.params.get_bool("LiveTorqueParamsToggle")):
       self.params.remove("SpeedDependentTorqueToggle")
       self.params.remove("FrictionReduction")
+      self.params.remove("SpeedDependentTorqueMomentToggle")
+
+    # The moment learner is a sub-mode of speed-dep, never armed on its own.
+    if not self.params.get_bool("SpeedDependentTorqueToggle"):
+      self.params.remove("SpeedDependentTorqueMomentToggle")
 
     # ICBM: clear if not available or if full longitudinal control is active
     if self.CP_SP is not None:

@@ -12,10 +12,13 @@ from openpilot.cereal import log
 from opendbc.sunnypilot.car.interfaces import get_speed_dep_config
 from openpilot.selfdrive.locationd.torqued import (
   TorqueEstimator, TorqueBuckets, VERSION, MIN_FILTER_DECAY,
+  STEER_BUCKET_BOUNDS, FRICTION_FACTOR, slope2rot,
 )
 from openpilot.sunnypilot.selfdrive.locationd.torqued_ext import (
   DEFAULT_SPEED_BIN_BOUNDS as SPEED_BIN_BOUNDS, DEFAULT_SPEED_BIN_CENTERS as SPEED_BIN_CENTERS,
-  TorqueEstimatorExt,
+  TorqueEstimatorExt, SpeedBinMoment,
+  MOMENT_ESS_CAP, MOMENT_MIN_ESS, MOMENT_MIN_XSTD, MOMENT_CACHE_ROW,
+  MOMENT_DENSITY_CEILING, MOMENT_DENSITY_FLOOR,
 )
 
 # Discover configured cars
@@ -31,7 +34,7 @@ PATCH_PARAMS = 'openpilot.selfdrive.locationd.torqued.Params'
 PATCH_EXT_PARAMS = 'openpilot.sunnypilot.selfdrive.locationd.torqued_ext.Params'
 
 
-def _setup_ext_mock(mock_ext_params_cls, speed_dep_on, enforce_on=None):
+def _setup_ext_mock(mock_ext_params_cls, speed_dep_on, enforce_on=None, moment_on=False):
   """Configure the torqued_ext Params mock for toggle state.
   EnforceTorqueControl follows speed_dep_on unless overridden: speed-dep
   requires Enforce since its settings live behind the Enforce-gated panel."""
@@ -42,6 +45,8 @@ def _setup_ext_mock(mock_ext_params_cls, speed_dep_on, enforce_on=None):
       return speed_dep_on
     if param == "EnforceTorqueControl":
       return enforce_on
+    if param == "SpeedDependentTorqueMomentToggle":
+      return moment_on
     return False
   mock_ext_params_cls.return_value.get_bool.side_effect = _get_bool
   mock_ext_params_cls.return_value.get.return_value = None
@@ -658,3 +663,258 @@ class TestEnsureSpeedBinsIdempotency:
     est._on_torque_point(0.2, 0.4, 10.0)
     # Should now have 2 points (not re-initialized)
     assert len(est.speed_bin_points[1]) == 2
+
+
+# --- Moment-matrix learner (SpeedDependentTorqueMomentToggle) ---
+# These use the unconfigured-car path on purpose: speed_dependent.toml carries no
+# entries, so the default bins are what actually runs on the device.
+
+def _make_moment_est(fingerprint=NON_SPEED_DEP_FINGERPRINT):
+  return TorqueEstimator(make_mock_CP(fingerprint=fingerprint))
+
+
+def _balanced_points(n_per_bucket=40, slope=3.0, offset=0.0, noise=0.0, seed=0):
+  """Points spread evenly over the steer buckets, so inverse-density weights settle
+  near 1 and the fit is comparable with an unweighted one."""
+  rng = np.random.default_rng(seed)
+  xs, ys = [], []
+  for lo, hi in STEER_BUCKET_BOUNDS:
+    for k in range(n_per_bucket):
+      x = lo + (hi - lo) * (k + 0.5) / n_per_bucket
+      xs.append(x)
+      ys.append(slope * x + offset + (rng.normal(0, noise) if noise else 0.0))
+  order = rng.permutation(len(xs))
+  return [(xs[i], ys[i]) for i in order]
+
+
+class TestMomentToggleGate:
+  @patch(PATCH_EXT_PARAMS)
+  @patch(PATCH_PARAMS)
+  def test_off_by_default_uses_point_store(self, mock_params_cls, mock_ext):
+    mock_params_cls.return_value.get.return_value = None
+    _setup_ext_mock(mock_ext, speed_dep_on=True, moment_on=False)
+    est = _make_moment_est()
+    assert est.speed_binned and not est.moment_learner
+    assert len(est.speed_bin_points) == len(SPEED_BIN_BOUNDS)
+    assert est.speed_bin_moments == []
+
+  @patch(PATCH_EXT_PARAMS)
+  @patch(PATCH_PARAMS)
+  def test_on_uses_moment_store(self, mock_params_cls, mock_ext):
+    mock_params_cls.return_value.get.return_value = None
+    _setup_ext_mock(mock_ext, speed_dep_on=True, moment_on=True)
+    est = _make_moment_est()
+    assert est.moment_learner
+    assert len(est.speed_bin_moments) == len(SPEED_BIN_BOUNDS)
+    assert est.speed_bin_points == []
+
+  @patch(PATCH_EXT_PARAMS)
+  @patch(PATCH_PARAMS)
+  def test_cannot_arm_without_speed_dep(self, mock_params_cls, mock_ext):
+    mock_params_cls.return_value.get.return_value = None
+    _setup_ext_mock(mock_ext, speed_dep_on=False, enforce_on=True, moment_on=True)
+    est = _make_moment_est()
+    assert not est.speed_binned
+    assert not est.moment_learner
+
+
+class TestMomentAlgebra:
+  """The moment fit must be upstream's TLS, just evaluated on the moments."""
+
+  def test_matches_upstream_svd(self):
+    pts = _balanced_points(slope=2.8, offset=0.05, noise=0.03, seed=3)
+    A = np.array([[x, 1.0, y] for x, y in pts])
+
+    mom = SpeedBinMoment(STEER_BUCKET_BOUNDS)
+    mom.M = A.T @ A                     # uniform weights, bypassing the density term
+    mom.S = float(len(A))
+    slope, friction = mom.fit(FRICTION_FACTOR)
+
+    _, _, v = np.linalg.svd(A, full_matrices=False)
+    exp_slope = float((-v.T[0:2, 2] / v.T[2, 2])[0])
+    _, spread = np.matmul(A[:, [0, 2]], slope2rot(exp_slope)).T
+    exp_friction = float(np.std(spread) * FRICTION_FACTOR)
+
+    assert slope == pytest.approx(exp_slope, rel=1e-6)
+    assert friction == pytest.approx(exp_friction, rel=1e-6)
+
+  def test_recovers_known_slope_through_add(self):
+    mom = SpeedBinMoment(STEER_BUCKET_BOUNDS)
+    for x, y in _balanced_points(slope=3.1, noise=0.02, seed=5):
+      mom.add(x, y, 1.0)
+    assert mom.is_valid()
+    slope, friction = mom.fit(FRICTION_FACTOR)
+    assert slope == pytest.approx(3.1, abs=0.05)
+    assert 0.0 <= friction < 0.2
+
+  def test_not_identifiable_without_steer_spread(self):
+    mom = SpeedBinMoment(STEER_BUCKET_BOUNDS)
+    for _ in range(500):
+      mom.add(0.05, 0.15, 1.0)          # every sample at the same steer
+    assert mom.S >= MOMENT_MIN_ESS
+    assert mom.x_std() < MOMENT_MIN_XSTD
+    assert not mom.is_valid()
+
+  def test_ess_cap_bounds_a_single_bad_sample(self):
+    """The point of the cap: no one observation can move the fit much."""
+    mom = SpeedBinMoment(STEER_BUCKET_BOUNDS)
+    while mom.S < MOMENT_ESS_CAP:
+      for x, y in _balanced_points(slope=3.0, noise=0.02, seed=7):
+        mom.add(x, y, 1.0)
+    before = mom.fit(FRICTION_FACTOR)[0]
+    mom.add(-0.5, 1.0, 1.0)             # worst case inside torqued's accept envelope
+    after = mom.fit(FRICTION_FACTOR)[0]
+    assert abs(after - before) < 0.05, f"single sample moved slope by {after - before:.4f}"
+
+  def test_density_weight_is_bounded(self):
+    mom = SpeedBinMoment(STEER_BUCKET_BOUNDS)
+    for _ in range(2000):
+      mom.add(0.05, 0.15, 1.0)          # hammer one bucket
+    rare = mom._density_weight(-0.45)   # a starved bucket
+    common = mom._density_weight(0.05)
+    assert rare <= MOMENT_DENSITY_CEILING
+    assert common >= MOMENT_DENSITY_FLOOR
+    assert rare > common
+
+
+class TestMomentKernelRouting:
+  @patch(PATCH_EXT_PARAMS)
+  @patch(PATCH_PARAMS)
+  def test_point_feeds_neighbouring_bins(self, mock_params_cls, mock_ext):
+    mock_params_cls.return_value.get.return_value = None
+    _setup_ext_mock(mock_ext, speed_dep_on=True, moment_on=True)
+    est = _make_moment_est()
+    target = SPEED_BIN_CENTERS.index(32.0)
+    est._on_torque_point(0.1, 0.3, 32.0)
+
+    weights = [m.S for m in est.speed_bin_moments]
+    assert weights[target] > 0
+    assert weights[target] == max(weights), "nearest bin must get the most weight"
+    assert weights[target + 1] > 0, "neighbour above must be informed too"
+    assert weights[0] == 0, "a far bin must not be touched"
+
+  @patch(PATCH_EXT_PARAMS)
+  @patch(PATCH_PARAMS)
+  def test_point_store_untouched_in_moment_mode(self, mock_params_cls, mock_ext):
+    mock_params_cls.return_value.get.return_value = None
+    _setup_ext_mock(mock_ext, speed_dep_on=True, moment_on=True)
+    est = _make_moment_est()
+    est._on_torque_point(0.1, 0.3, 32.0)
+    assert est.speed_bin_points == []
+
+
+class TestMomentMessageAndCache:
+  @patch(PATCH_EXT_PARAMS)
+  @patch(PATCH_PARAMS)
+  def test_cereal_fields_populated(self, mock_params_cls, mock_ext):
+    mock_params_cls.return_value.get.return_value = None
+    _setup_ext_mock(mock_ext, speed_dep_on=True, moment_on=True)
+    est = _make_moment_est()
+    est._on_torque_point(0.1, 0.3, 20.0)
+    ltp = est.get_msg().liveTorqueParameters
+    assert len(ltp.speedBinCenters) == len(SPEED_BIN_CENTERS)
+    assert len(ltp.speedBinLatAccelFactors) == len(SPEED_BIN_BOUNDS)
+    assert len(ltp.speedBinValid) == len(SPEED_BIN_BOUNDS)
+
+  @patch(PATCH_EXT_PARAMS)
+  @patch(PATCH_PARAMS)
+  def test_cache_rows_are_moment_shaped(self, mock_params_cls, mock_ext):
+    mock_params_cls.return_value.get.return_value = None
+    _setup_ext_mock(mock_ext, speed_dep_on=True, moment_on=True)
+    est = _make_moment_est()
+    for x, y in _balanced_points(n_per_bucket=10, seed=11):
+      est._on_torque_point(x, y, 32.0)
+    ltp = est.get_msg(with_points=True).liveTorqueParameters
+    assert len(ltp.speedBinPoints) == len(SPEED_BIN_BOUNDS)
+    for rows in ltp.speedBinPoints:
+      assert len(rows) == 1
+      assert len(rows[0]) == MOMENT_CACHE_ROW
+
+  def test_cache_roundtrip_preserves_fit(self):
+    mom = SpeedBinMoment(STEER_BUCKET_BOUNDS)
+    for x, y in _balanced_points(slope=2.9, noise=0.02, seed=13):
+      mom.add(x, y, 1.0)
+    row = mom.to_cache()
+
+    restored = SpeedBinMoment(STEER_BUCKET_BOUNDS)
+    assert restored.load_cache(row)
+    assert restored.S == pytest.approx(mom.S)
+    assert restored.fit(FRICTION_FACTOR)[0] == pytest.approx(mom.fit(FRICTION_FACTOR)[0], rel=1e-9)
+    assert np.allclose(restored.dens, mom.dens)
+
+  def test_cache_rejects_wrong_shape_and_garbage(self):
+    mom = SpeedBinMoment(STEER_BUCKET_BOUNDS)
+    assert not mom.load_cache([0.1, 0.2])                                  # a point row
+    assert not mom.load_cache([0.0] * MOMENT_CACHE_ROW)                    # zero weight
+    over = [1.0] * MOMENT_CACHE_ROW
+    over[6] = MOMENT_ESS_CAP * 2                                           # weight above the cap
+    assert not mom.load_cache(over)
+    filled = SpeedBinMoment(STEER_BUCKET_BOUNDS)
+    for x, y in _balanced_points(n_per_bucket=5, seed=17):
+      filled.add(x, y, 1.0)
+    row = filled.to_cache()
+    row[0] = float('nan')
+    assert not mom.load_cache(row)
+
+  @patch(PATCH_EXT_PARAMS)
+  @patch(PATCH_PARAMS)
+  def test_restore_ignores_point_cache_in_moment_mode(self, mock_params_cls, mock_ext):
+    mock_params_cls.return_value.get.return_value = None
+    _setup_ext_mock(mock_ext, speed_dep_on=True, moment_on=True)
+    est = _make_moment_est()
+    n = len(SPEED_BIN_BOUNDS)
+
+    ltp = MagicMock()
+    ltp.speedBinCenters = list(est.speed_bin_centers)   # must match, or restore bails early
+    ltp.speedBinLatAccelFactors = [2.5] * n
+    ltp.speedBinFrictions = [0.1] * n
+    ltp.speedBinPoints = [[[0.1, 0.3], [0.2, 0.4]] for _ in range(n)]   # point-store cache
+
+    est._restore_ext_cache(cache_ltp=ltp)
+    assert all(m.S == 0.0 for m in est.speed_bin_moments), "point cache must not feed moments"
+    assert est.speed_bin_filtered[0]['latAccelFactor'].x == pytest.approx(2.5)
+
+  @patch(PATCH_EXT_PARAMS)
+  @patch(PATCH_PARAMS)
+  def test_restore_ignores_moment_cache_in_point_mode(self, mock_params_cls, mock_ext):
+    mock_params_cls.return_value.get.return_value = None
+    _setup_ext_mock(mock_ext, speed_dep_on=True, moment_on=False)
+    est = _make_moment_est()
+    n = len(SPEED_BIN_BOUNDS)
+
+    filled = SpeedBinMoment(STEER_BUCKET_BOUNDS)
+    for x, y in _balanced_points(n_per_bucket=5, seed=19):
+      filled.add(x, y, 1.0)
+
+    ltp = MagicMock()
+    ltp.speedBinCenters = list(est.speed_bin_centers)   # must match, or restore bails early
+    ltp.speedBinLatAccelFactors = [2.5] * n
+    ltp.speedBinFrictions = [0.1] * n
+    ltp.speedBinPoints = [[filled.to_cache()] for _ in range(n)]        # moment cache
+
+    est._restore_ext_cache(cache_ltp=ltp)
+    # restore must have run (filters took the cached values) but dropped the rows
+    assert est.speed_bin_filtered[0]['latAccelFactor'].x == pytest.approx(2.5)
+    assert all(len(b) == 0 for b in est.speed_bin_points), "moment cache must not feed point buckets"
+
+
+class TestMomentSanityClip:
+  @patch(PATCH_EXT_PARAMS)
+  @patch(PATCH_PARAMS)
+  def test_fit_clipped_to_bin_bounds(self, mock_params_cls, mock_ext):
+    mock_params_cls.return_value.get.return_value = None
+    _setup_ext_mock(mock_ext, speed_dep_on=True, moment_on=True)
+    est = _make_moment_est()
+    # narrow the sanity window so a plausible fit is forced to clip
+    est.speed_bin_lat_accel_factor_bounds = [(2.0, 2.2)] * len(SPEED_BIN_BOUNDS)
+    est.speed_bin_friction_bounds = [(0.05, 0.15)] * len(SPEED_BIN_BOUNDS)
+
+    for x, y in _balanced_points(slope=3.5, noise=0.01, seed=23):
+      est._on_torque_point(x, y, 32.0)
+    results = est._estimate_params_speed_binned()
+
+    fitted = [i for i, valid in results if valid]
+    assert fitted, "feeding at 32 m/s should make at least the nearby bins fit"
+    for i in fitted:
+      assert 2.0 <= est.speed_bin_filtered[i]['latAccelFactor'].x <= 2.2
+      assert 0.05 <= est.speed_bin_filtered[i]['frictionCoefficient'].x <= 0.15
