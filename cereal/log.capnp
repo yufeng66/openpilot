@@ -2236,6 +2236,13 @@ struct LiveTorqueParametersData {
   version @11 :Int32;
   useParams @12 :Bool;
   calPerc @13 :Int8;
+
+  # dp - speed-dependent torque learner (same field ids as sunnypilot)
+  speedBinCenters @14 :List(Float32);
+  speedBinLatAccelFactors @15 :List(Float32);
+  speedBinFrictions @16 :List(Float32);
+  speedBinValid @17 :List(Bool);
+  speedBinPoints @18 :List(List(List(Float32)));  # per-bin moment cache rows
 }
 
 struct LiveDelayData {

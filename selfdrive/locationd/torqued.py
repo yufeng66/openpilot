@@ -11,6 +11,7 @@ from openpilot.common.realtime import config_realtime_process, DT_MDL
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.locationd.helpers import PointBuckets, ParameterEstimator, PoseCalibrator, Pose
+from dragonpilot.selfdrive.locationd.torqued_ext import TorqueEstimatorExt
 
 HISTORY = 5  # secs
 POINTS_PER_BUCKET = 1500
@@ -50,8 +51,9 @@ class TorqueBuckets(PointBuckets):
         break
 
 
-class TorqueEstimator(ParameterEstimator):
+class TorqueEstimator(ParameterEstimator, TorqueEstimatorExt):
   def __init__(self, CP, decimated=False, track_all_points=False):
+    TorqueEstimatorExt.__init__(self, CP)
     self.hist_len = int(HISTORY / DT_MDL)
     self.lag = 0.0
     self.track_all_points = track_all_points  # for offline analysis, without max lateral accel or max steer torque filters
@@ -79,6 +81,8 @@ class TorqueEstimator(ParameterEstimator):
       self.offline_latAccelFactor = CP.lateralTuning.torque.latAccelFactor
 
     self.calibrator = PoseCalibrator()
+
+    TorqueEstimatorExt.initialize_custom_params(self)
 
     self.reset()
 
@@ -197,9 +201,11 @@ class TorqueEstimator(ParameterEstimator):
         vego = np.interp(t, self.raw_points['carState_t'], self.raw_points['vego'])
         steer = np.interp(t, self.raw_points['carOutput_t'], self.raw_points['steer_torque']).item()
         lateral_acc = (vego * yaw_rate) - (np.sin(roll) * ACCELERATION_DUE_TO_GRAVITY).item()
-        if all(lat_active) and not any(steer_override) and (vego > MIN_VEL) and (abs(steer) > STEER_MIN_THRESHOLD):
+        if all(lat_active) and not any(steer_override) and (abs(steer) > STEER_MIN_THRESHOLD):
           if abs(lateral_acc) <= LAT_ACC_THRESHOLD:
-            self.filtered_points.add_point(steer, lateral_acc)
+            if vego > MIN_VEL:
+              self.filtered_points.add_point(steer, lateral_acc)
+            self._on_torque_point(steer, lateral_acc, vego)
 
           if self.track_all_points:
             self.all_torque_points.append([steer, lateral_acc])
@@ -239,6 +245,7 @@ class TorqueEstimator(ParameterEstimator):
     liveTorqueParameters.calPerc = self.filtered_points.get_valid_percent()
     liveTorqueParameters.decay = self.decay
     liveTorqueParameters.maxResets = self.resets
+    self._extend_msg(liveTorqueParameters, with_points)
     return msg
 
 

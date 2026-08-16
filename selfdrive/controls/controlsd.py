@@ -20,6 +20,7 @@ from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
+from dragonpilot.selfdrive.controls.lib.speed_dep_helpers import SPEED_DEP_CAR_CONFIG, interp_live_torque_params
 
 State = log.SelfdriveState.OpenpilotState
 LaneChangeState = log.LaneChangeState
@@ -63,6 +64,9 @@ class Controls:
     self.alka_enabled = bool(self.CP.alternativeExperience & ALTERNATIVE_EXPERIENCE.ALKA)
     self.alka_active = False
 
+    # dp - speed-dependent torque learner: per-car seed curve, if one is shipped
+    self.speed_dep_cfg = SPEED_DEP_CAR_CONFIG.get(self.CP.carFingerprint)
+
   def update(self):
     self.sm.update(15)
     if self.sm.updated["liveCalibration"]:
@@ -87,8 +91,11 @@ class Controls:
     if self.CP.lateralTuning.which() == 'torque':
       torque_params = self.sm['liveTorqueParameters']
       if self.sm.all_checks(['liveTorqueParameters']) and torque_params.useParams:
-        self.LaC.update_live_torque_params(torque_params.latAccelFactorFiltered, torque_params.latAccelOffsetFiltered,
-                                           torque_params.frictionCoefficientFiltered)
+        # dp - speed-dependent torque learner: interpolate the per-bin learned
+        # values at the current speed. With the learner off the message carries
+        # no bins and this is exactly the stock filtered values.
+        laf, lao, friction = interp_live_torque_params(torque_params, CS.vEgo, self.speed_dep_cfg)
+        self.LaC.update_live_torque_params(laf, lao, friction)
 
     long_plan = self.sm['longitudinalPlan']
     model_v2 = self.sm['modelV2']
