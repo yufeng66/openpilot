@@ -56,7 +56,7 @@ class ControlsExt(ModelStateBase):
       self.lane_centering.get_params()
 
       if self.CP.lateralTuning.which() == 'torque':
-        self.lat_delay = get_lat_delay(self.params, sm["liveDelay"].lateralDelay)
+        self.lat_delay = get_lat_delay(self.params, sm["lateralDelay"].lateralDelay)
         self.friction_reduction = self.params.get("FrictionReduction", return_default=True)
 
       self._param_update_time = time.monotonic()
@@ -128,8 +128,8 @@ class ControlsExt(ModelStateBase):
 
     # Speed-dependent torque: apply per-bin learned values to the lateral controller
     if (self.CP.lateralTuning.which() == 'torque'
-        and sm.updated.get('liveTorqueParameters', False)
-        and sm.all_checks(['liveTorqueParameters'])):
-      tp = sm['liveTorqueParameters']
+        and sm.updated.get('lateralTorqueParameters', False)
+        and sm.all_checks(['lateralTorqueParameters'])):
+      tp = sm['lateralTorqueParameters']
       if tp.useParams and hasattr(self.LaC, 'extension'):
         self.LaC.extension.update_speed_dep_torque(tp, self.friction_reduction)

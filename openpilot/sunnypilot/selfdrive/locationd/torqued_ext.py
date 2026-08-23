@@ -38,7 +38,7 @@ MOMENT_SPEED_BIN_CENTERS = [round(mph * 0.44704, 3) for mph in range(15, 90, 5)]
 # Tuned offline against 39k C3 points (untracked/learner_analysis_2026-08-09).
 # MOMENT_ESS_CAP is in POINTS, not seconds: one observation can take at most
 # ceiling/(cap+ceiling) of the state, which is what bounds a bad sample's impact.
-# At the device's 20 Hz livePose rate a saturated bin holds ~5 min of in-bin
+# At the device's 20 Hz deviceMotion rate a saturated bin holds ~5 min of in-bin
 # driving (half-life ~3.5 min); the offline replay ran on 4x-decimated qlogs, so
 # its wall-clock horizon looked 4x longer for the same cap.
 MOMENT_ESS_CAP = 6000.0
@@ -173,7 +173,7 @@ class SpeedBinMoment:
     return float(slope), float(friction)
 
   def to_cache(self):
-    """Flat row for the liveTorqueParameters cache. Density counters are included so
+    """Flat row for the lateralTorqueParameters cache. Density counters are included so
     a reboot does not hand the first few points the full rare-range up-weight."""
     return [float(self.M[0, 0]), float(self.M[0, 1]), float(self.M[0, 2]),
             float(self.M[1, 1]), float(self.M[1, 2]), float(self.M[2, 2]),
@@ -326,7 +326,7 @@ class SpeedBinMomentBank:
     self.dens[i] = 0.0
 
   def to_cache(self, i):
-    """Flat row for the liveTorqueParameters cache, identical layout to the
+    """Flat row for the lateralTorqueParameters cache, identical layout to the
     reference so device caches decode with either implementation."""
     mi = self.M[i]
     return [float(mi[0, 0]), float(mi[0, 1]), float(mi[0, 2]),
@@ -546,7 +546,7 @@ class TorqueEstimatorExt:
         if not cache:
           return
         with log.Event.from_bytes(cache) as evt:
-          cache_ltp = evt.liveTorqueParameters
+          cache_ltp = evt.lateralTorqueParameters
         params_cache = self._params.get("CarParamsPrevRoute")
         if params_cache is None:
           cloudlog.info("speed-dep: no previous CarParams, restarting learning")

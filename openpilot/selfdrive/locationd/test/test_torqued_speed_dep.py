@@ -130,7 +130,7 @@ class TestSpeedBinnedLearning:
       # Trigger lazy bin init so _extend_msg populates fields
       est._on_torque_point(0.1, 0.3, 10.0)
       msg = est.get_msg()
-      ltp = msg.liveTorqueParameters
+      ltp = msg.lateralTorqueParameters
       assert len(ltp.speedBinCenters) == len(SPEED_BIN_CENTERS)
       assert len(ltp.speedBinLatAccelFactors) == len(SPEED_BIN_BOUNDS)
       assert len(ltp.speedBinFrictions) == len(SPEED_BIN_BOUNDS)
@@ -143,7 +143,7 @@ class TestSpeedBinnedLearning:
     _setup_ext_mock(mock_ext, speed_dep_on=True)
     est = TorqueEstimator(make_mock_CP(lat_accel_factor=1.25, friction=0.125))
     msg = est.get_msg()
-    ltp = msg.liveTorqueParameters
+    ltp = msg.lateralTorqueParameters
     assert ltp.latAccelFactorFiltered == pytest.approx(1.25, abs=1e-2)
     assert ltp.frictionCoefficientFiltered == pytest.approx(0.125, abs=1e-3)
 
@@ -196,7 +196,7 @@ class TestBackwardCompatibility:
     _setup_ext_mock(mock_ext, speed_dep_on=False)
     est = TorqueEstimator(make_mock_CP(fingerprint=NON_SPEED_DEP_FINGERPRINT))
     msg = est.get_msg()
-    ltp = msg.liveTorqueParameters
+    ltp = msg.lateralTorqueParameters
     assert len(ltp.speedBinCenters) == 0
     assert len(ltp.speedBinLatAccelFactors) == 0
     assert len(ltp.speedBinFrictions) == 0
@@ -209,7 +209,7 @@ class TestBackwardCompatibility:
     _setup_ext_mock(mock_ext, speed_dep_on=False)
     est = TorqueEstimator(make_mock_CP(fingerprint=NON_SPEED_DEP_FINGERPRINT, lat_accel_factor=2.0, friction=0.15))
     msg = est.get_msg()
-    ltp = msg.liveTorqueParameters
+    ltp = msg.lateralTorqueParameters
     assert ltp.latAccelFactorFiltered == pytest.approx(2.0, abs=1e-2)
     assert ltp.frictionCoefficientFiltered == pytest.approx(0.15, abs=1e-3)
     assert not est.speed_binned
@@ -234,7 +234,7 @@ class TestBackwardCompatibility:
     for fp in fingerprints:
       est = TorqueEstimator(make_mock_CP(fingerprint=fp))
       msg = est.get_msg()
-      assert msg.liveTorqueParameters.calPerc == 0
+      assert msg.lateralTorqueParameters.calPerc == 0
 
 
 class TestCentersToBoumds:
@@ -400,11 +400,11 @@ class TestCacheRestore:
 
 
 def _make_cache_bytes(version=None, centers=None, lafs=None, frictions=None, n_bins=None):
-  """Serialized log.Event holding a liveTorqueParameters cache blob."""
+  """Serialized log.Event holding a lateralTorqueParameters cache blob."""
   if n_bins is None:
     n_bins = len(SPEED_BIN_CENTERS)
   evt = log.Event.new_message()
-  ltp = evt.init('liveTorqueParameters')
+  ltp = evt.init('lateralTorqueParameters')
   ltp.version = VERSION if version is None else version
   ltp.speedBinCenters = [float(c) for c in (SPEED_BIN_CENTERS if centers is None else centers)]
   ltp.speedBinLatAccelFactors = [float(v) for v in ([2.0 + 0.1 * i for i in range(n_bins)] if lafs is None else lafs)]
@@ -590,7 +590,7 @@ class TestGetMsgWithPoints:
     est._on_torque_point(0.2, 0.4, 20.0)
 
     msg = est.get_msg(with_points=True)
-    ltp = msg.liveTorqueParameters
+    ltp = msg.lateralTorqueParameters
     assert len(ltp.speedBinPoints) == len(SPEED_BIN_BOUNDS)
     total_points = sum(len(bin_pts) for bin_pts in ltp.speedBinPoints)
     assert total_points >= 2
@@ -604,7 +604,7 @@ class TestGetMsgWithPoints:
     est._on_torque_point(0.1, 0.3, 10.0)
 
     msg = est.get_msg(with_points=False)
-    ltp = msg.liveTorqueParameters
+    ltp = msg.lateralTorqueParameters
     assert len(ltp.speedBinPoints) == 0
 
 
@@ -817,7 +817,7 @@ class TestMomentMessageAndCache:
     est = _make_moment_est()
     est._on_torque_point(0.1, 0.3, 20.0)
     n = len(est.speed_bin_bounds)
-    ltp = est.get_msg().liveTorqueParameters
+    ltp = est.get_msg().lateralTorqueParameters
     assert len(ltp.speedBinCenters) == n
     assert len(ltp.speedBinLatAccelFactors) == n
     assert len(ltp.speedBinValid) == n
@@ -830,7 +830,7 @@ class TestMomentMessageAndCache:
     est = _make_moment_est()
     for x, y in _balanced_points(n_per_bucket=10, seed=11):
       est._on_torque_point(x, y, 32.0)
-    ltp = est.get_msg(with_points=True).liveTorqueParameters
+    ltp = est.get_msg(with_points=True).lateralTorqueParameters
     assert len(ltp.speedBinPoints) == len(est.speed_bin_bounds)
     for rows in ltp.speedBinPoints:
       assert len(rows) == 1

@@ -34,7 +34,7 @@ class UIStateSP:
     self.is_sp_release: bool = self.params.get_bool("IsReleaseSpBranch")
     self.sm_services_ext = [
       "modelManagerSP", "selfdriveStateSP", "longitudinalPlanSP", "backupManagerSP",
-      "gpsLocation", "liveTorqueParameters", "carStateSP", "liveMapDataSP", "carParamsSP", "liveDelay"
+      "gpsLocation", "lateralTorqueParameters", "carStateSP", "liveMapDataSP", "carParamsSP", "lateralDelay"
     ]
 
     self.sunnylink_state = SunnylinkState()
@@ -254,36 +254,30 @@ class DeviceSP:
     self._blocked_by_screensaver: bool = False
 
   def _set_awake(self, on: bool, _ui_state=None):
-    if on:
-      # Waking (ignition on, touch): the screensaver can still be up because it
-      # blocks the sleep transition (Device._awake never went False), or stranded
-      # if ScreenSaverEnabled was turned off while it was showing. Never leave it
-      # covering the UI once the device is awake — pop it wherever it sits in the
-      # stack, not just on top, so a dialog pushed above it cannot bury it.
-      if gui_app.widget_in_stack(_ui_state.screensaver):
-        gui_app.pop_widget(gui_app._nav_stack.index(_ui_state.screensaver))
-      self._blocked_by_screensaver = False
-      return
-
-    entering_sleep = not self._blocked_by_screensaver
     self._blocked_by_screensaver = False
 
-    # Only on the sleep transition itself: while the screensaver holds the
-    # transition open this method re-runs every frame, and a Params write per
-    # frame would wear the flash.
-    if _ui_state.boot_offroad_mode == 1 and entering_sleep:
-      _ui_state.params.put_bool("OffroadMode", True)
-
-    if _ui_state.screensaver_enabled:
+    if not on and _ui_state.screensaver_enabled:
       if _ui_state.screensaver.was_dismissed:
-        if gui_app.get_active_widget() == _ui_state.screensaver:
-          gui_app.pop_widget()
+        self.dismiss_screensaver(_ui_state)
       elif _ui_state.screensaver.is_active:
         self._blocked_by_screensaver = True
       else:
         _ui_state.screensaver.initialize()
         gui_app.push_widget(_ui_state.screensaver)
         self._blocked_by_screensaver = True
+    else:
+      self.dismiss_screensaver(_ui_state)
+
+    # blocked runs every frame, so write only when actually sleeping
+    if _ui_state.boot_offroad_mode == 1 and not on and not self._blocked_by_screensaver:
+      _ui_state.params.put_bool("OffroadMode", True)
+
+  def dismiss_screensaver(self, _ui_state) -> None:
+    # Pop it wherever it sits in the stack, not only when it is on top: a dialog
+    # pushed above the screensaver would otherwise leave it stranded underneath.
+    if gui_app.widget_in_stack(_ui_state.screensaver):
+      gui_app.pop_widget(gui_app._nav_stack.index(_ui_state.screensaver))
+    self._blocked_by_screensaver = False
 
   @staticmethod
   def set_onroad_brightness(_ui_state, awake: bool, cur_brightness: float) -> float:

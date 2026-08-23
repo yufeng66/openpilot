@@ -163,7 +163,7 @@ class ActualLateralAccelElement(LateralControlElement):
     controls_state = sm['controlsState']
     curvature = controls_state.curvature
     v_ego = sm['carState'].vEgo
-    roll = sm['liveParameters'].roll if sm.valid['liveParameters'] else 0.0
+    roll = sm['vehicleParameters'].roll if sm.valid['vehicleParameters'] else 0.0
     lat_active = sm['carControl'].latActive
     steer_override = sm['carState'].steeringPressed
 
@@ -182,7 +182,7 @@ class DesiredLateralAccelElement(LateralControlElement):
     controls_state = sm['controlsState']
     desired_curvature = controls_state.desiredCurvature
     v_ego = sm['carState'].vEgo
-    roll = sm['liveParameters'].roll if sm.valid['liveParameters'] else 0.0
+    roll = sm['vehicleParameters'].roll if sm.valid['vehicleParameters'] else 0.0
     lat_active = sm['carControl'].latActive
     steer_override = sm['carState'].steeringPressed
 
@@ -257,7 +257,7 @@ def _applied_torque_values(sm) -> tuple[float, float, bool] | None:
   inactive and the display should fall back to the global learner values."""
   global _speed_dep_cfg_cache
 
-  ltp = sm['liveTorqueParameters']
+  ltp = sm['lateralTorqueParameters']
   speed_bp = list(ltp.speedBinCenters)
   if not ltp.useParams or not speed_bp:
     return None
@@ -315,9 +315,9 @@ class FrictionCoefficientElement:
       color = rl.Color(0, 255, 0, 255) if on_learned else rl.WHITE
       return UiElement(f"{friction:.3f}", "FRIC.", self.unit, color)
 
-    ltp = sm['liveTorqueParameters']
+    ltp = sm['lateralTorqueParameters']
     value = f"{ltp.frictionCoefficientFiltered:.3f}"
-    color = rl.Color(0, 255, 0, 255) if ltp.liveValid else rl.WHITE
+    color = rl.Color(0, 255, 0, 255) if ltp.valid else rl.WHITE
     return UiElement(value, "FRIC.", self.unit, color)
 
 
@@ -335,9 +335,9 @@ class LatAccelFactorElement:
       color = rl.Color(0, 255, 0, 255) if on_learned else rl.WHITE
       return UiElement(f"{laf:.2f}", "L.A.F.", self.unit, color)
 
-    ltp = sm['liveTorqueParameters']
+    ltp = sm['lateralTorqueParameters']
     value = f"{ltp.latAccelFactorFiltered:.2f}"
-    color = rl.Color(0, 255, 0, 255) if ltp.liveValid else rl.WHITE
+    color = rl.Color(0, 255, 0, 255) if ltp.valid else rl.WHITE
     return UiElement(value, "L.A.F.", self.unit, color)
 
 
@@ -346,14 +346,14 @@ class SteeringLagElement:
     self.unit = "s"
 
   def update(self, sm, is_metric: bool) -> UiElement:
-    if not sm.recv_frame['liveDelay']:
+    if not sm.recv_frame['lateralDelay']:
       return UiElement("-", "LAG", self.unit, rl.WHITE)
 
-    ld = sm['liveDelay']
+    ld = sm['lateralDelay']
     value = f"{ld.lateralDelay:.3f}"
-    if ld.status == log.LiveDelayData.Status.estimated:
+    if ld.status == log.LateralDelay.Status.estimated:
       color = rl.Color(0, 255, 0, 255)
-    elif ld.status == log.LiveDelayData.Status.invalid:
+    elif ld.status == log.LateralDelay.Status.invalid:
       # lagd block std exceeded MAX_LAG_STD; lateralDelay has fallen back to the default
       color = rl.Color(255, 188, 0, 255)
     else:
