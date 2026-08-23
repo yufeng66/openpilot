@@ -165,6 +165,10 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"InteractivityTimeout", {PERSISTENT | BACKUP, INT, "0"}},
     {"IsDevelopmentBranch", {CLEAR_ON_MANAGER_START, BOOL}},
     {"IsReleaseSpBranch", {CLEAR_ON_MANAGER_START, BOOL}},
+    {"LaneCenteringEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"LaneCenteringModelAuthority", {PERSISTENT | BACKUP, FLOAT, "1.0"}},  // 0.0 - 1.0
+    {"LaneCenteringOffset", {PERSISTENT | BACKUP, FLOAT, "0.0"}},  // meters, + is left
+    {"LaneCenteringPauseOnBlinker", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"LastGPSPositionLLK", {PERSISTENT, STRING}},
     {"LeadDepartAlert", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"MaxTimeOffroad", {PERSISTENT | BACKUP, INT, "1800"}},

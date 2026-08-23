@@ -81,6 +81,39 @@ class SteeringLayout(Widget):
       description=lambda: tr("Delay before lateral control resumes after the turn signal ends."),
       label_callback=lambda delay: f'{delay} {"s"}'
     )
+    self._lane_centering_toggle = toggle_item_sp(
+      param="LaneCenteringEnabled",
+      title=lambda: tr("Lane Centering Assist"),
+      description=lambda: tr("Nudge the car back toward the center of the lane lines when the driving model settles off-center. " +
+                             "Only active above 11 mph (18 km/h) with both lane lines clearly detected, and never during a lane change."),
+    )
+    self._lane_centering_offset = option_item_sp(
+      param="LaneCenteringOffset",
+      title=lambda: tr("Lane Centering: Position Offset"),
+      min_value=-30,
+      max_value=30,
+      value_change_step=1,
+      description=lambda: tr("Bias the target position within the lane. Positive values sit left of center, negative values right of center. " +
+                             "The offset is reduced automatically in narrow lanes."),
+      use_float_scaling=True,
+      label_callback=lambda v: f"{v / 100:.2f} m",
+    )
+    self._lane_centering_authority = option_item_sp(
+      param="LaneCenteringModelAuthority",
+      title=lambda: tr("Lane Centering: Driving Model Priority"),
+      min_value=0,
+      max_value=100,
+      value_change_step=5,
+      description=lambda: tr("How much the driving model may override lane centering when it is confident and has deliberately moved off-center, " +
+                             "for example around a lead vehicle or road works. 100% always yields to the model, 0% always centers on the lane lines."),
+      use_float_scaling=True,
+      label_callback=lambda v: f"{v}%",
+    )
+    self._lane_centering_blinker = toggle_item_sp(
+      param="LaneCenteringPauseOnBlinker",
+      title=lambda: tr("Lane Centering: Pause with Blinker"),
+      description=lambda: tr("Fade lane centering out while a turn signal is on."),
+    )
     self._torque_control_toggle = toggle_item_sp(
       param="EnforceTorqueControl",
       title=lambda: tr("Enforce Torque Lateral Control"),
@@ -107,6 +140,11 @@ class SteeringLayout(Widget):
       self._blinker_control_options,
       self._blinker_reengage_delay,
       LineSeparatorSP(40),
+      self._lane_centering_toggle,
+      self._lane_centering_offset,
+      self._lane_centering_authority,
+      self._lane_centering_blinker,
+      LineSeparatorSP(40),
       self._torque_control_toggle,
       self._torque_customization_button,
       LineSeparatorSP(40),
@@ -131,6 +169,11 @@ class SteeringLayout(Widget):
     self._mads_settings_button.action_item.set_enabled(ui_state.is_offroad() and self._mads_toggle.action_item.get_state())
     self._blinker_control_options.set_visible(self._blinker_control_toggle.action_item.get_state())
     self._blinker_reengage_delay.set_visible(self._blinker_control_toggle.action_item.get_state())
+
+    lane_centering_enabled = self._lane_centering_toggle.action_item.get_state()
+    self._lane_centering_offset.set_visible(lane_centering_enabled)
+    self._lane_centering_authority.set_visible(lane_centering_enabled)
+    self._lane_centering_blinker.set_visible(lane_centering_enabled)
 
     enforce_torque_enabled = self._torque_control_toggle.action_item.get_state()
     nnlc_enabled = self._nnlc_toggle.action_item.get_state()

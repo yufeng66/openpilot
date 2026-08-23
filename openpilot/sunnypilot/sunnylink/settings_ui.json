@@ -269,6 +269,67 @@
           ]
         },
         {
+          "id": "lane_centering",
+          "title": "Lane Centering",
+          "description": "Lane-line based centering assist on top of the driving model",
+          "items": [
+            {
+              "key": "LaneCenteringEnabled",
+              "widget": "toggle",
+              "title": "Lane Centering Assist",
+              "description": "Nudge the car back toward the center of the lane lines when the driving model settles off-center. Only active above 11 mph (18 km/h) with both lane lines clearly detected, and never during a lane change.",
+              "sub_items": [
+                {
+                  "key": "LaneCenteringOffset",
+                  "widget": "option",
+                  "title": "Lane Centering: Position Offset",
+                  "description": "Bias the target position within the lane. Positive values sit left of center, negative values right of center. The offset is reduced automatically in narrow lanes.",
+                  "min": -0.3,
+                  "max": 0.3,
+                  "step": 0.01,
+                  "unit": "meters",
+                  "enablement": [
+                    {
+                      "type": "param",
+                      "key": "LaneCenteringEnabled",
+                      "equals": true
+                    }
+                  ]
+                },
+                {
+                  "key": "LaneCenteringModelAuthority",
+                  "widget": "option",
+                  "title": "Lane Centering: Driving Model Priority",
+                  "description": "How much the driving model may override lane centering when it is confident and has deliberately moved off-center, for example around a lead vehicle or road works. 1.0 always yields to the model, 0.0 always centers on the lane lines.",
+                  "min": 0.0,
+                  "max": 1.0,
+                  "step": 0.05,
+                  "enablement": [
+                    {
+                      "type": "param",
+                      "key": "LaneCenteringEnabled",
+                      "equals": true
+                    }
+                  ]
+                },
+                {
+                  "key": "LaneCenteringPauseOnBlinker",
+                  "widget": "toggle",
+                  "title": "Lane Centering: Pause with Blinker",
+                  "description": "Fade lane centering out while a turn signal is on.",
+                  "enablement": [
+                    {
+                      "type": "param",
+                      "key": "LaneCenteringEnabled",
+                      "equals": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
           "id": "torque",
           "title": "Torque Control",
           "description": "Steering torque tuning and lateral control method",
