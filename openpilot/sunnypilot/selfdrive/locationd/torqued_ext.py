@@ -38,10 +38,15 @@ MOMENT_SPEED_BIN_CENTERS = [round(mph * 0.44704, 3) for mph in range(15, 90, 5)]
 # Tuned offline against 39k C3 points (untracked/learner_analysis_2026-08-09).
 # MOMENT_ESS_CAP is in POINTS, not seconds: one observation can take at most
 # ceiling/(cap+ceiling) of the state, which is what bounds a bad sample's impact.
-# At the device's 20 Hz deviceMotion rate a saturated bin holds ~5 min of in-bin
-# driving (half-life ~3.5 min); the offline replay ran on 4x-decimated qlogs, so
-# its wall-clock horizon looked 4x longer for the same cap.
-MOMENT_ESS_CAP = 6000.0
+# At the device's 20 Hz deviceMotion rate a saturated bin holds ~20 min of in-bin
+# driving (half-life ~14 min); the offline replay ran on 4x-decimated qlogs, so
+# its wall-clock horizon looked 4x longer for the same cap. Raised from 6000
+# (3.5 min half-life) after road feedback 2026-08-23: at that horizon a single
+# 5-8 min pass through a speed range rewrote 65-80% of those bins' state, which
+# read as the learner chasing the most recent drive. Raising the cap is cache
+# compatible in one direction only - load_cache rejects rows with S above the
+# cap, so old (smaller-S) rows still load, but lowering it would drop them all.
+MOMENT_ESS_CAP = 24000.0
 MOMENT_DENSITY_CEILING = 7.0    # max inverse-density up-weight for rare steer ranges
 MOMENT_DENSITY_FLOOR = 0.1      # min down-weight for over-represented steer ranges
 MOMENT_SPEED_KERNEL_H = 3.0     # m/s, Gaussian speed kernel width
