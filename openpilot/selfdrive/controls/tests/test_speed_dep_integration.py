@@ -9,16 +9,20 @@ per-frame interpolation logic) rather than LatControlTorqueExt, which
 inherits from NNLC and requires model files to init.
 """
 import numpy as np
-import pytest
+import unittest
 
 from unittest.mock import MagicMock, patch
 from opendbc.sunnypilot.car.interfaces import get_speed_dep_config
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext import LatControlTorqueExt
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext_override import LatControlTorqueExtOverride
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_dep_helpers import friction_scale
+from openpilot.sunnypilot.selfdrive.test.approx import approx
 
 SPEED_DEP_CARS = get_speed_dep_config()
 
+# Plain unittest.TestCase, not OpenpilotTestCase: every test here mocks Params, so it needs no
+# param prefix, and OpenpilotTestCase's fixture shim reads a test's signature - which @patch
+# rewrites - so the injected mock arguments would be mistaken for fixtures.
 PATCH_PARAMS_OVERRIDE = 'openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext_override.Params'
 PATCH_PARAMS_TORQUED_EXT = 'openpilot.sunnypilot.selfdrive.locationd.torqued_ext.Params'
 PATCH_PARAMS_TORQUED = 'openpilot.selfdrive.locationd.torqued.Params'
@@ -65,7 +69,7 @@ def activate_speed_dep(ovr, speed_bp=None, lat_accel_factor_bp=None, friction_bp
   ovr._speed_dep_friction_bp = friction_bp or list(SAMPLE_FRICTION_BP)
 
 
-class TestLafInterpolatedBySpeed:
+class TestLafInterpolatedBySpeed(unittest.TestCase):
   """torque_params.latAccelFactor must be speed-interpolated
   before torque_from_lateral_accel reads it."""
 
@@ -78,7 +82,7 @@ class TestLafInterpolatedBySpeed:
     ovr.update_override_torque_params(tp)
 
     expected = float(np.interp(10.0, SAMPLE_SPEED_BP, SAMPLE_LAT_ACCEL_FACTOR_BP))
-    assert tp.latAccelFactor == pytest.approx(expected, abs=1e-4), \
+    assert tp.latAccelFactor == approx(expected, atol=1e-4), \
       f"latAccelFactor should be {expected}, got {tp.latAccelFactor}"
 
   def test_lat_accel_factor_differs_at_different_speeds(self):
@@ -95,7 +99,7 @@ class TestLafInterpolatedBySpeed:
     ovr.update_override_torque_params(tp)
     factor_high = tp.latAccelFactor
 
-    assert factor_low != pytest.approx(factor_high, abs=0.01), \
+    assert factor_low != approx(factor_high, atol=0.01), \
       "latAccelFactor must differ between 6.5 m/s and 37.5 m/s"
 
   def test_lat_accel_factor_not_global_value(self):
@@ -108,11 +112,11 @@ class TestLafInterpolatedBySpeed:
     ovr._last_vego = 6.5  # seed latAccelFactor at 6.5 is 2.39, not 2.0
     ovr.update_override_torque_params(tp)
 
-    assert tp.latAccelFactor != pytest.approx(global_factor, abs=0.01), \
+    assert tp.latAccelFactor != approx(global_factor, atol=0.01), \
       "latAccelFactor should be speed-interpolated, not the global value"
 
 
-class TestFrictionInterpolatedBySpeed:
+class TestFrictionInterpolatedBySpeed(unittest.TestCase):
   """torque_params.friction must be speed-interpolated
   before get_friction reads it."""
 
@@ -125,7 +129,7 @@ class TestFrictionInterpolatedBySpeed:
     ovr.update_override_torque_params(tp)
 
     expected = float(np.interp(35.0, SAMPLE_SPEED_BP, SAMPLE_FRICTION_BP))
-    assert tp.friction == pytest.approx(expected, abs=1e-4)
+    assert tp.friction == approx(expected, atol=1e-4)
 
   def test_friction_differs_at_different_speeds(self):
     ovr = make_override()
@@ -141,10 +145,10 @@ class TestFrictionInterpolatedBySpeed:
     ovr.update_override_torque_params(tp)
     fric_high = tp.friction
 
-    assert fric_low != pytest.approx(fric_high, abs=0.01)
+    assert fric_low != approx(fric_high, atol=0.01)
 
 
-class TestToggleOffClearsState:
+class TestToggleOffClearsState(unittest.TestCase):
   """_speed_dep_active must be cleared when bins disappear."""
 
   def test_inactive_by_default(self):
@@ -177,7 +181,7 @@ class TestToggleOffClearsState:
     assert tp.friction == 99.0
 
 
-class TestManualOverridePriority:
+class TestManualOverridePriority(unittest.TestCase):
   """Manual override must take priority over speed-dep."""
 
   def test_manual_overwrites_speed_dep(self):
@@ -190,9 +194,9 @@ class TestManualOverridePriority:
     # frame = -1, after +1 -> frame=0, 0 % 300 == 0 -> manual fires
     ovr.update_override_torque_params(tp)
 
-    assert tp.latAccelFactor == pytest.approx(350.0, abs=0.1), \
+    assert tp.latAccelFactor == approx(350.0, atol=0.1), \
       "Manual latAccelFactor should overwrite speed-dep"
-    assert tp.friction == pytest.approx(25.0, abs=0.1), \
+    assert tp.friction == approx(25.0, atol=0.1), \
       "Manual friction should overwrite speed-dep"
 
   def test_speed_dep_used_when_manual_off(self):
@@ -204,11 +208,11 @@ class TestManualOverridePriority:
     ovr.update_override_torque_params(tp)
 
     expected_factor = float(np.interp(15.0, SAMPLE_SPEED_BP, SAMPLE_LAT_ACCEL_FACTOR_BP))
-    assert tp.latAccelFactor == pytest.approx(expected_factor, abs=1e-4), \
+    assert tp.latAccelFactor == approx(expected_factor, atol=1e-4), \
       "Without manual override, speed-dep should be used"
 
 
-class TestChangeDetection:
+class TestChangeDetection(unittest.TestCase):
   """update_override_torque_params should only return changed=True when values differ."""
 
   def test_no_change_returns_false(self):
@@ -236,7 +240,7 @@ class TestChangeDetection:
     assert changed, "Should return True when values changed"
 
 
-class TestLearnerSanityBounds:
+class TestLearnerSanityBounds(unittest.TestCase):
   """Speed-bin sanity bounds must allow learning regardless of
   the 'Less Restrict' toggle."""
 
@@ -296,11 +300,11 @@ class TestLearnerSanityBounds:
     nudged = seed_factor * 1.10
     lo, hi = est.speed_bin_lat_accel_factor_bounds[0]
     clipped = np.clip(nudged, lo, hi)
-    assert clipped == pytest.approx(nudged, abs=1e-6), \
+    assert clipped == approx(nudged, atol=1e-6), \
       f"+10% nudge ({nudged:.3f}) should not be clipped by +/-30% bounds ({lo:.3f}, {hi:.3f})"
 
 
-class TestToggleOffFallback:
+class TestToggleOffFallback(unittest.TestCase):
   """When speed-dep is deactivated, controller must not use stale tables."""
 
   def test_deactivation_via_empty_bins(self):
@@ -334,10 +338,10 @@ class TestToggleOffFallback:
     ovr.update_override_torque_params(tp)
 
     expected_factor = float(np.interp(15.0, SAMPLE_SPEED_BP, SAMPLE_LAT_ACCEL_FACTOR_BP))
-    assert tp.latAccelFactor == pytest.approx(expected_factor, abs=1e-4)
+    assert tp.latAccelFactor == approx(expected_factor, atol=1e-4)
 
 
-class TestUpdateSpeedDepTorqueFallback:
+class TestUpdateSpeedDepTorqueFallback(unittest.TestCase):
   """Tests for update_speed_dep_torque fallback logic (TOML seeds vs global filtered)."""
 
   @staticmethod
@@ -468,7 +472,7 @@ class TestUpdateSpeedDepTorqueFallback:
     assert mock_self._speed_dep_active is False
 
 
-class TestNearestLearnedBinFallback:
+class TestNearestLearnedBinFallback(unittest.TestCase):
   """Without TOML seeds, unlearned bins fall back to the nearest learned bin:
   the interp table holds learned bins only, so np.interp clamps to the nearest
   learned value beyond the ends and bridges unlearned gaps. Global values are
@@ -507,14 +511,14 @@ class TestNearestLearnedBinFallback:
     tp = TorqueParams()
     ovr._last_vego = 2.0  # below the lowest learned bin (10.0)
     ovr.update_override_torque_params(tp)
-    assert tp.latAccelFactor == pytest.approx(2.39, abs=1e-4)
-    assert tp.friction == pytest.approx(0.113, abs=1e-4)
+    assert tp.latAccelFactor == approx(2.39, atol=1e-4)
+    assert tp.friction == approx(0.113, atol=1e-4)
 
     tp = TorqueParams()
     ovr._last_vego = 45.0  # above the highest learned bin (32.0)
     ovr.update_override_torque_params(tp)
-    assert tp.latAccelFactor == pytest.approx(3.09, abs=1e-4)
-    assert tp.friction == pytest.approx(0.078, abs=1e-4)
+    assert tp.latAccelFactor == approx(3.09, atol=1e-4)
+    assert tp.friction == approx(0.078, atol=1e-4)
 
   @patch(PATCH_GET_SPEED_DEP_CONFIG)
   def test_interior_gap_bridges_learned_neighbors(self, mock_get_config):
@@ -531,21 +535,21 @@ class TestNearestLearnedBinFallback:
     # at the unlearned 15.0 bin center, value bridges the 10.0 and 21.0 learned bins
     expected = float(np.interp(15.0, [10.0, 21.0], [2.39, 2.61]))
     got = float(np.interp(15.0, mock_self._speed_dep_speed_bp, mock_self._speed_dep_lat_accel_factor_bp))
-    assert got == pytest.approx(expected, abs=1e-4)
+    assert got == approx(expected, atol=1e-4)
     assert 9.9 not in mock_self._speed_dep_lat_accel_factor_bp
     assert 2.0 not in mock_self._speed_dep_lat_accel_factor_bp
 
 
-class TestFrictionReduction:
+class TestFrictionReduction(unittest.TestCase):
   """The Friction Reduction setting scales learned friction only — never TOML
   seeds, never the global fallback, never latAccelFactor."""
 
   def test_friction_scale_steps_and_clamping(self):
-    assert friction_scale(0) == pytest.approx(1.0)
-    assert friction_scale(5) == pytest.approx(0.5)
-    assert friction_scale(9) == pytest.approx(0.1)
-    assert friction_scale(-3) == pytest.approx(1.0)
-    assert friction_scale(42) == pytest.approx(0.1)
+    assert friction_scale(0) == approx(1.0)
+    assert friction_scale(5) == approx(0.5)
+    assert friction_scale(9) == approx(0.1)
+    assert friction_scale(-3) == approx(1.0)
+    assert friction_scale(42) == approx(0.1)
 
   @patch(PATCH_GET_SPEED_DEP_CONFIG)
   def test_reduction_scales_learned_friction_only(self, mock_get_config):
@@ -558,8 +562,8 @@ class TestFrictionReduction:
 
     LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, friction_reduction=5)
 
-    assert mock_self._speed_dep_friction_bp == pytest.approx([f * 0.5 for f in frictions])
-    assert mock_self._speed_dep_lat_accel_factor_bp == pytest.approx(lafs)
+    assert mock_self._speed_dep_friction_bp == approx([f * 0.5 for f in frictions])
+    assert mock_self._speed_dep_lat_accel_factor_bp == approx(lafs)
 
   @patch(PATCH_GET_SPEED_DEP_CONFIG)
   def test_reduction_not_applied_to_global_fallback(self, mock_get_config):
@@ -570,7 +574,7 @@ class TestFrictionReduction:
 
     LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, friction_reduction=9)
 
-    assert mock_self._speed_dep_friction_bp == pytest.approx([0.15] * 7)
+    assert mock_self._speed_dep_friction_bp == approx([0.15] * 7)
 
   @patch(PATCH_GET_SPEED_DEP_CONFIG)
   def test_reduction_spares_toml_seeds(self, mock_get_config):
@@ -589,12 +593,12 @@ class TestFrictionReduction:
 
     for i in range(7):
       if valid[i]:
-        assert mock_self._speed_dep_friction_bp[i] == pytest.approx(0.1), f"learned bin {i} must be scaled"
+        assert mock_self._speed_dep_friction_bp[i] == approx(0.1), f"learned bin {i} must be scaled"
       else:
-        assert mock_self._speed_dep_friction_bp[i] == pytest.approx(seed_frictions[i]), f"seed bin {i} must not be scaled"
+        assert mock_self._speed_dep_friction_bp[i] == approx(seed_frictions[i]), f"seed bin {i} must not be scaled"
 
 
-class TestExtrapolationAtBoundaries:
+class TestExtrapolationAtBoundaries(unittest.TestCase):
   """np.interp clamps to edge values for speeds outside the bin range."""
 
   def test_speed_below_first_bin_clamps(self):
@@ -603,8 +607,8 @@ class TestExtrapolationAtBoundaries:
     tp = TorqueParams()
     ovr._last_vego = 0.0
     ovr.update_override_torque_params(tp)
-    assert tp.latAccelFactor == pytest.approx(SAMPLE_LAT_ACCEL_FACTOR_BP[0], abs=1e-4)
-    assert tp.friction == pytest.approx(SAMPLE_FRICTION_BP[0], abs=1e-4)
+    assert tp.latAccelFactor == approx(SAMPLE_LAT_ACCEL_FACTOR_BP[0], atol=1e-4)
+    assert tp.friction == approx(SAMPLE_FRICTION_BP[0], atol=1e-4)
 
   def test_speed_above_last_bin_clamps(self):
     ovr = make_override()
@@ -612,8 +616,8 @@ class TestExtrapolationAtBoundaries:
     tp = TorqueParams()
     ovr._last_vego = 100.0
     ovr.update_override_torque_params(tp)
-    assert tp.latAccelFactor == pytest.approx(SAMPLE_LAT_ACCEL_FACTOR_BP[-1], abs=1e-4)
-    assert tp.friction == pytest.approx(SAMPLE_FRICTION_BP[-1], abs=1e-4)
+    assert tp.latAccelFactor == approx(SAMPLE_LAT_ACCEL_FACTOR_BP[-1], atol=1e-4)
+    assert tp.friction == approx(SAMPLE_FRICTION_BP[-1], atol=1e-4)
 
   def test_speed_at_exact_bin_center(self):
     ovr = make_override()
@@ -622,5 +626,5 @@ class TestExtrapolationAtBoundaries:
       tp = TorqueParams()
       ovr._last_vego = speed
       ovr.update_override_torque_params(tp)
-      assert tp.latAccelFactor == pytest.approx(SAMPLE_LAT_ACCEL_FACTOR_BP[i], abs=1e-4)
-      assert tp.friction == pytest.approx(SAMPLE_FRICTION_BP[i], abs=1e-4)
+      assert tp.latAccelFactor == approx(SAMPLE_LAT_ACCEL_FACTOR_BP[i], atol=1e-4)
+      assert tp.friction == approx(SAMPLE_FRICTION_BP[i], atol=1e-4)

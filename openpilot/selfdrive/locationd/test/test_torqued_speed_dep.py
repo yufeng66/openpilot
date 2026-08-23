@@ -6,7 +6,7 @@ All tests are driven by config, not hardcoded fingerprints.
 import math
 
 import numpy as np
-import pytest
+import unittest
 
 from unittest.mock import MagicMock, patch
 from opendbc.car.structs import car
@@ -23,6 +23,8 @@ from openpilot.sunnypilot.selfdrive.locationd.torqued_ext import (
   MOMENT_DENSITY_CEILING, MOMENT_DENSITY_FLOOR, MOMENT_SPEED_KERNEL_H, MOMENT_KERNEL_MIN,
   MOMENT_MIN_IN_BIN_ESS, MOMENT_MIN_LAT_ACCEL_FACTOR,
 )
+from openpilot.common.parameterized import parameterized
+from openpilot.sunnypilot.selfdrive.test.approx import approx
 
 # Discover configured cars
 SPEED_DEP_CARS = get_speed_dep_config()
@@ -32,6 +34,9 @@ SPEED_DEP_FINGERPRINT = next(iter(SPEED_DEP_CARS)) if SPEED_DEP_CARS else None
 NON_SPEED_DEP_FINGERPRINT = 'NOT_IN_SPEED_DEP_TOML'
 assert NON_SPEED_DEP_FINGERPRINT not in SPEED_DEP_CARS, f"{NON_SPEED_DEP_FINGERPRINT} unexpectedly in speed_dependent.toml"
 
+# Plain unittest.TestCase, not OpenpilotTestCase: every test here mocks Params, so it needs no
+# param prefix, and OpenpilotTestCase's fixture shim reads a test's signature - which @patch
+# rewrites - so the injected mock arguments would be mistaken for fixtures.
 # Both Params locations need mocking: torqued.py (cache) and torqued_ext.py (toggles)
 PATCH_PARAMS = 'openpilot.selfdrive.locationd.torqued.Params'
 PATCH_EXT_PARAMS = 'openpilot.sunnypilot.selfdrive.locationd.torqued_ext.Params'
@@ -67,10 +72,10 @@ def make_mock_CP(fingerprint=None, lat_accel_factor=1.25, friction=0.125):
   return CP
 
 
-class TestSpeedDepConfig:
+class TestSpeedDepConfig(unittest.TestCase):
   """Config-level tests that don't need a TorqueEstimator."""
 
-  @pytest.mark.skipif(SPEED_DEP_FINGERPRINT is None, reason="No cars in speed_dependent.toml")
+  @unittest.skipIf(SPEED_DEP_FINGERPRINT is None, "No cars in speed_dependent.toml")
   def test_speed_dep_config_has_entries(self):
     assert len(SPEED_DEP_CARS) > 0
 
@@ -88,8 +93,8 @@ class TestSpeedDepConfig:
       assert center <= hi
 
 
-@pytest.mark.skipif(SPEED_DEP_FINGERPRINT is None, reason="No cars in speed_dependent.toml")
-class TestSpeedBinnedLearning:
+@unittest.skipIf(SPEED_DEP_FINGERPRINT is None, "No cars in speed_dependent.toml")
+class TestSpeedBinnedLearning(unittest.TestCase):
   """Test speed-binned learning with toggle ON."""
 
   @patch(PATCH_EXT_PARAMS)
@@ -144,8 +149,8 @@ class TestSpeedBinnedLearning:
     est = TorqueEstimator(make_mock_CP(lat_accel_factor=1.25, friction=0.125))
     msg = est.get_msg()
     ltp = msg.lateralTorqueParameters
-    assert ltp.latAccelFactorFiltered == pytest.approx(1.25, abs=1e-2)
-    assert ltp.frictionCoefficientFiltered == pytest.approx(0.125, abs=1e-3)
+    assert ltp.latAccelFactorFiltered == approx(1.25, atol=1e-2)
+    assert ltp.frictionCoefficientFiltered == approx(0.125, atol=1e-3)
 
   @patch(PATCH_EXT_PARAMS)
   @patch(PATCH_PARAMS)
@@ -156,7 +161,7 @@ class TestSpeedBinnedLearning:
     assert len(est.filtered_points) == 0
 
 
-class TestToggleGate:
+class TestToggleGate(unittest.TestCase):
   """Toggle OFF should disable speed-binning even for configured cars."""
 
   @patch(PATCH_EXT_PARAMS)
@@ -178,7 +183,7 @@ class TestToggleGate:
     assert not est.speed_binned
 
 
-class TestBackwardCompatibility:
+class TestBackwardCompatibility(unittest.TestCase):
   """Cars with toggle OFF should be unaffected."""
 
   @patch(PATCH_EXT_PARAMS)
@@ -210,8 +215,8 @@ class TestBackwardCompatibility:
     est = TorqueEstimator(make_mock_CP(fingerprint=NON_SPEED_DEP_FINGERPRINT, lat_accel_factor=2.0, friction=0.15))
     msg = est.get_msg()
     ltp = msg.lateralTorqueParameters
-    assert ltp.latAccelFactorFiltered == pytest.approx(2.0, abs=1e-2)
-    assert ltp.frictionCoefficientFiltered == pytest.approx(0.15, abs=1e-3)
+    assert ltp.latAccelFactorFiltered == approx(2.0, atol=1e-2)
+    assert ltp.frictionCoefficientFiltered == approx(0.15, atol=1e-3)
     assert not est.speed_binned
 
   @patch(PATCH_EXT_PARAMS)
@@ -237,7 +242,7 @@ class TestBackwardCompatibility:
       assert msg.lateralTorqueParameters.calPerc == 0
 
 
-class TestCentersToBoumds:
+class TestCentersToBoumds(unittest.TestCase):
   """Tests for _centers_to_bounds static method."""
 
   def test_midpoints_between_centers(self):
@@ -254,19 +259,19 @@ class TestCentersToBoumds:
     bounds = TorqueEstimatorExt._centers_to_bounds([7.0, 35.0])
     assert bounds[0][0] == 5    # DEFAULT_SPEED_BIN_BOUNDS[0][0]
     assert bounds[-1][1] == 40  # DEFAULT_SPEED_BIN_BOUNDS[-1][1]
-    assert bounds[0][1] == pytest.approx((7.0 + 35.0) / 2)
-    assert bounds[1][0] == pytest.approx((7.0 + 35.0) / 2)
+    assert bounds[0][1] == approx((7.0 + 35.0) / 2)
+    assert bounds[1][0] == approx((7.0 + 35.0) / 2)
 
   def test_contiguous_coverage(self):
     """Each bin's upper bound must equal the next bin's lower bound."""
     centers = [8.0, 15.0, 22.0, 30.0]
     bounds = TorqueEstimatorExt._centers_to_bounds(centers)
     for i in range(len(bounds) - 1):
-      assert bounds[i][1] == pytest.approx(bounds[i + 1][0])
+      assert bounds[i][1] == approx(bounds[i + 1][0])
 
 
-@pytest.mark.skipif(SPEED_DEP_FINGERPRINT is None, reason="No cars in speed_dependent.toml")
-class TestCacheRestore:
+@unittest.skipIf(SPEED_DEP_FINGERPRINT is None, "No cars in speed_dependent.toml")
+class TestCacheRestore(unittest.TestCase):
   """Tests for _restore_ext_cache."""
 
   @patch(PATCH_EXT_PARAMS)
@@ -289,8 +294,8 @@ class TestCacheRestore:
     est._restore_ext_cache(cache_ltp)
 
     for i in range(n_bins):
-      assert est.speed_bin_filtered[i]['latAccelFactor'].x == pytest.approx(cached_lafs[i])
-      assert est.speed_bin_filtered[i]['frictionCoefficient'].x == pytest.approx(cached_frictions[i])
+      assert est.speed_bin_filtered[i]['latAccelFactor'].x == approx(cached_lafs[i])
+      assert est.speed_bin_filtered[i]['frictionCoefficient'].x == approx(cached_frictions[i])
 
   @patch(PATCH_EXT_PARAMS)
   @patch(PATCH_PARAMS)
@@ -308,7 +313,7 @@ class TestCacheRestore:
 
     est._restore_ext_cache(cache_ltp)
 
-    assert est.speed_bin_filtered[0]['latAccelFactor'].x == pytest.approx(original_laf)
+    assert est.speed_bin_filtered[0]['latAccelFactor'].x == approx(original_laf)
 
   @patch(PATCH_EXT_PARAMS)
   @patch(PATCH_PARAMS)
@@ -328,7 +333,7 @@ class TestCacheRestore:
 
     est._restore_ext_cache(cache_ltp)
 
-    assert est.speed_bin_filtered[0]['latAccelFactor'].x == pytest.approx(original_laf)
+    assert est.speed_bin_filtered[0]['latAccelFactor'].x == approx(original_laf)
 
   @patch(PATCH_EXT_PARAMS)
   @patch(PATCH_PARAMS)
@@ -350,8 +355,8 @@ class TestCacheRestore:
     est._restore_ext_cache(cache_ltp)
 
     for i in range(n_bins):
-      assert est.speed_bin_filtered[i]['latAccelFactor'].x == pytest.approx(cached_lafs[i])
-      assert est.speed_bin_filtered[i]['frictionCoefficient'].x == pytest.approx(cached_frictions[i])
+      assert est.speed_bin_filtered[i]['latAccelFactor'].x == approx(cached_lafs[i])
+      assert est.speed_bin_filtered[i]['frictionCoefficient'].x == approx(cached_frictions[i])
 
   @patch(PATCH_EXT_PARAMS)
   @patch(PATCH_PARAMS)
@@ -373,7 +378,7 @@ class TestCacheRestore:
 
     est._restore_ext_cache(cache_ltp)
 
-    assert est.speed_bin_filtered[0]['latAccelFactor'].x == pytest.approx(5.0)
+    assert est.speed_bin_filtered[0]['latAccelFactor'].x == approx(5.0)
     assert all(d == MIN_FILTER_DECAY for d in est.speed_bin_decays)
 
     est.decay = saved_decay
@@ -423,7 +428,7 @@ def _make_prev_cp_bytes(fingerprint=NON_SPEED_DEP_FINGERPRINT, lat_accel_factor=
   return cp.to_bytes()
 
 
-class TestCacheRestoreKeyGate:
+class TestCacheRestoreKeyGate(unittest.TestCase):
   """The Params-read restore path must honor the global learner's restore key.
   Uses an unconfigured car (default bins), so these run even with an empty TOML.
   Seed values are the offline 1.25/0.125 from make_mock_CP."""
@@ -449,16 +454,16 @@ class TestCacheRestoreKeyGate:
     frictions = [0.15 + 0.01 * i for i in range(n_bins)]
     est = self._build_est(mock_ext, _make_cache_bytes(lafs=lafs, frictions=frictions), _make_prev_cp_bytes())
     for i in range(n_bins):
-      assert est.speed_bin_filtered[i]['latAccelFactor'].x == pytest.approx(lafs[i], abs=1e-4)
-      assert est.speed_bin_filtered[i]['frictionCoefficient'].x == pytest.approx(frictions[i], abs=1e-4)
+      assert est.speed_bin_filtered[i]['latAccelFactor'].x == approx(lafs[i], atol=1e-4)
+      assert est.speed_bin_filtered[i]['frictionCoefficient'].x == approx(frictions[i], atol=1e-4)
 
   @patch(PATCH_EXT_PARAMS)
   @patch(PATCH_PARAMS)
   def test_restore_rejected_on_version_mismatch(self, mock_params_cls, mock_ext):
     mock_params_cls.return_value.get.return_value = None
     est = self._build_est(mock_ext, _make_cache_bytes(version=VERSION + 1), _make_prev_cp_bytes())
-    assert est.speed_bin_filtered[0]['latAccelFactor'].x == pytest.approx(1.25)
-    assert est.speed_bin_filtered[0]['frictionCoefficient'].x == pytest.approx(0.125)
+    assert est.speed_bin_filtered[0]['latAccelFactor'].x == approx(1.25)
+    assert est.speed_bin_filtered[0]['frictionCoefficient'].x == approx(0.125)
 
   @patch(PATCH_EXT_PARAMS)
   @patch(PATCH_PARAMS)
@@ -466,7 +471,7 @@ class TestCacheRestoreKeyGate:
     """Same default bin centers on every unconfigured car — the key must still reject."""
     mock_params_cls.return_value.get.return_value = None
     est = self._build_est(mock_ext, _make_cache_bytes(), _make_prev_cp_bytes(fingerprint='SOME_OTHER_CAR'))
-    assert est.speed_bin_filtered[0]['latAccelFactor'].x == pytest.approx(1.25)
+    assert est.speed_bin_filtered[0]['latAccelFactor'].x == approx(1.25)
 
   @patch(PATCH_EXT_PARAMS)
   @patch(PATCH_PARAMS)
@@ -474,14 +479,14 @@ class TestCacheRestoreKeyGate:
     """A torque-data update (new offline baseline) must invalidate the bins too."""
     mock_params_cls.return_value.get.return_value = None
     est = self._build_est(mock_ext, _make_cache_bytes(), _make_prev_cp_bytes(friction=0.2))
-    assert est.speed_bin_filtered[0]['latAccelFactor'].x == pytest.approx(1.25)
+    assert est.speed_bin_filtered[0]['latAccelFactor'].x == approx(1.25)
 
   @patch(PATCH_EXT_PARAMS)
   @patch(PATCH_PARAMS)
   def test_restore_rejected_without_prev_carparams(self, mock_params_cls, mock_ext):
     mock_params_cls.return_value.get.return_value = None
     est = self._build_est(mock_ext, _make_cache_bytes(), None)
-    assert est.speed_bin_filtered[0]['latAccelFactor'].x == pytest.approx(1.25)
+    assert est.speed_bin_filtered[0]['latAccelFactor'].x == approx(1.25)
 
   @patch(PATCH_EXT_PARAMS)
   @patch(PATCH_PARAMS)
@@ -500,11 +505,11 @@ class TestCacheRestoreKeyGate:
 
     est._restore_ext_cache(cache_ltp)
 
-    assert est.speed_bin_filtered[0]['latAccelFactor'].x == pytest.approx(5.0)
+    assert est.speed_bin_filtered[0]['latAccelFactor'].x == approx(5.0)
 
 
-@pytest.mark.skipif(SPEED_DEP_FINGERPRINT is None, reason="No cars in speed_dependent.toml")
-class TestNaNHandling:
+@unittest.skipIf(SPEED_DEP_FINGERPRINT is None, "No cars in speed_dependent.toml")
+class TestNaNHandling(unittest.TestCase):
   """Tests for bin behavior when SVD fails."""
 
   @patch(PATCH_EXT_PARAMS)
@@ -576,8 +581,8 @@ class TestNaNHandling:
     assert est.speed_bin_points[target_bin] is mock_bucket  # preserved
 
 
-@pytest.mark.skipif(SPEED_DEP_FINGERPRINT is None, reason="No cars in speed_dependent.toml")
-class TestGetMsgWithPoints:
+@unittest.skipIf(SPEED_DEP_FINGERPRINT is None, "No cars in speed_dependent.toml")
+class TestGetMsgWithPoints(unittest.TestCase):
   """get_msg(with_points=True) should populate speedBinPoints."""
 
   @patch(PATCH_EXT_PARAMS)
@@ -608,7 +613,7 @@ class TestGetMsgWithPoints:
     assert len(ltp.speedBinPoints) == 0
 
 
-class TestUnconfiguredCarToggleOn:
+class TestUnconfiguredCarToggleOn(unittest.TestCase):
   """Unconfigured car with speed-dep ON should use default bins and offline seeds."""
 
   @patch(PATCH_EXT_PARAMS)
@@ -631,11 +636,11 @@ class TestUnconfiguredCarToggleOn:
                                        lat_accel_factor=2.5, friction=0.18))
     est._on_torque_point(0.1, 0.3, 10.0)
     for i in range(len(SPEED_BIN_BOUNDS)):
-      assert est.speed_bin_filtered[i]['latAccelFactor'].x == pytest.approx(2.5)
-      assert est.speed_bin_filtered[i]['frictionCoefficient'].x == pytest.approx(0.18)
+      assert est.speed_bin_filtered[i]['latAccelFactor'].x == approx(2.5)
+      assert est.speed_bin_filtered[i]['frictionCoefficient'].x == approx(0.18)
 
 
-class TestOnTorquePointWhenOff:
+class TestOnTorquePointWhenOff(unittest.TestCase):
   """_on_torque_point should be a no-op when speed_binned is False."""
 
   @patch(PATCH_EXT_PARAMS)
@@ -648,8 +653,8 @@ class TestOnTorquePointWhenOff:
     assert not hasattr(est, 'speed_bin_points')
 
 
-@pytest.mark.skipif(SPEED_DEP_FINGERPRINT is None, reason="No cars in speed_dependent.toml")
-class TestEnsureSpeedBinsIdempotency:
+@unittest.skipIf(SPEED_DEP_FINGERPRINT is None, "No cars in speed_dependent.toml")
+class TestEnsureSpeedBinsIdempotency(unittest.TestCase):
   """_ensure_speed_bins should not re-init on subsequent calls."""
 
   @patch(PATCH_EXT_PARAMS)
@@ -690,7 +695,7 @@ def _balanced_points(n_per_bucket=40, slope=3.0, offset=0.0, noise=0.0, seed=0):
   return [(xs[i], ys[i]) for i in order]
 
 
-class TestMomentToggleGate:
+class TestMomentToggleGate(unittest.TestCase):
   @patch(PATCH_EXT_PARAMS)
   @patch(PATCH_PARAMS)
   def test_off_by_default_uses_point_store(self, mock_params_cls, mock_ext):
@@ -722,7 +727,7 @@ class TestMomentToggleGate:
     assert not est.moment_learner
 
 
-class TestMomentAlgebra:
+class TestMomentAlgebra(unittest.TestCase):
   """The moment fit must be upstream's TLS, just evaluated on the moments."""
 
   def test_matches_upstream_svd(self):
@@ -739,8 +744,8 @@ class TestMomentAlgebra:
     _, spread = np.matmul(A[:, [0, 2]], slope2rot(exp_slope)).T
     exp_friction = float(np.std(spread) * FRICTION_FACTOR)
 
-    assert slope == pytest.approx(exp_slope, rel=1e-6)
-    assert friction == pytest.approx(exp_friction, rel=1e-6)
+    assert slope == approx(exp_slope, rtol=1e-6)
+    assert friction == approx(exp_friction, rtol=1e-6)
 
   def test_recovers_known_slope_through_add(self):
     mom = SpeedBinMoment(STEER_BUCKET_BOUNDS)
@@ -748,7 +753,7 @@ class TestMomentAlgebra:
       mom.add(x, y, 1.0)
     assert mom.is_valid()
     slope, friction = mom.fit(FRICTION_FACTOR)
-    assert slope == pytest.approx(3.1, abs=0.05)
+    assert slope == approx(3.1, atol=0.05)
     assert 0.0 <= friction < 0.2
 
   def test_not_identifiable_without_steer_spread(self):
@@ -781,7 +786,7 @@ class TestMomentAlgebra:
     assert rare > common
 
 
-class TestMomentKernelRouting:
+class TestMomentKernelRouting(unittest.TestCase):
   @patch(PATCH_EXT_PARAMS)
   @patch(PATCH_PARAMS)
   def test_point_feeds_neighbouring_bins(self, mock_params_cls, mock_ext):
@@ -808,7 +813,7 @@ class TestMomentKernelRouting:
     assert est.speed_bin_points == []
 
 
-class TestMomentMessageAndCache:
+class TestMomentMessageAndCache(unittest.TestCase):
   @patch(PATCH_EXT_PARAMS)
   @patch(PATCH_PARAMS)
   def test_cereal_fields_populated(self, mock_params_cls, mock_ext):
@@ -844,9 +849,9 @@ class TestMomentMessageAndCache:
 
     restored = SpeedBinMoment(STEER_BUCKET_BOUNDS)
     assert restored.load_cache(row)
-    assert restored.S == pytest.approx(mom.S)
-    assert restored.S_in == pytest.approx(mom.S_in)
-    assert restored.fit(FRICTION_FACTOR)[0] == pytest.approx(mom.fit(FRICTION_FACTOR)[0], rel=1e-9)
+    assert restored.S == approx(mom.S)
+    assert restored.S_in == approx(mom.S_in)
+    assert restored.fit(FRICTION_FACTOR)[0] == approx(mom.fit(FRICTION_FACTOR)[0], rtol=1e-9)
     assert np.allclose(restored.dens, mom.dens)
 
   def test_cache_rejects_wrong_shape_and_garbage(self):
@@ -882,7 +887,7 @@ class TestMomentMessageAndCache:
 
     est._restore_ext_cache(cache_ltp=ltp)
     assert (est.moment_bank.S == 0.0).all(), "point cache must not feed moments"
-    assert est.speed_bin_filtered[0]['latAccelFactor'].x == pytest.approx(2.5)
+    assert est.speed_bin_filtered[0]['latAccelFactor'].x == approx(2.5)
 
   @patch(PATCH_EXT_PARAMS)
   @patch(PATCH_PARAMS)
@@ -904,11 +909,11 @@ class TestMomentMessageAndCache:
 
     est._restore_ext_cache(cache_ltp=ltp)
     # restore must have run (filters took the cached values) but dropped the rows
-    assert est.speed_bin_filtered[0]['latAccelFactor'].x == pytest.approx(2.5)
+    assert est.speed_bin_filtered[0]['latAccelFactor'].x == approx(2.5)
     assert all(len(b) == 0 for b in est.speed_bin_points), "moment cache must not feed point buckets"
 
 
-class TestMomentSanityClip:
+class TestMomentSanityClip(unittest.TestCase):
   @patch(PATCH_EXT_PARAMS)
   @patch(PATCH_PARAMS)
   def test_fit_clipped_to_bin_bounds(self, mock_params_cls, mock_ext):
@@ -973,10 +978,10 @@ class TestMomentSanityClip:
 
     for _ in range(400):
       est._estimate_params_speed_binned()
-    assert est.speed_bin_filtered[target]['latAccelFactor'].x == pytest.approx(3.5, abs=0.05)
+    assert est.speed_bin_filtered[target]['latAccelFactor'].x == approx(3.5, atol=0.05)
 
 
-class TestMomentSampleGates:
+class TestMomentSampleGates(unittest.TestCase):
   @patch(PATCH_EXT_PARAMS)
   @patch(PATCH_PARAMS)
   def test_below_min_speed_points_rejected(self, mock_params_cls, mock_ext):
@@ -1024,7 +1029,7 @@ class TestMomentSampleGates:
     assert not mom.is_valid()
 
 
-class TestMomentDefaultGrid:
+class TestMomentDefaultGrid(unittest.TestCase):
   """Moment mode defaults to the uniform 5-mph grid; point mode keeps the coarse
   bins (it would starve on ~1/15 of the data per bin); a TOML speed_bp wins over
   both."""
@@ -1044,7 +1049,7 @@ class TestMomentDefaultGrid:
     assert est.speed_bin_bounds[0][0] == 5
     assert est.speed_bin_bounds[-1][1] == 40
     for (_, hi), (lo, _) in zip(est.speed_bin_bounds[:-1], est.speed_bin_bounds[1:], strict=True):
-      assert hi == pytest.approx(lo)
+      assert hi == approx(lo)
     n = len(est.speed_bin_bounds)
     assert len(est.speed_bin_filtered) == n
     assert len(est.speed_bin_lat_accel_factor_bounds) == n
@@ -1081,7 +1086,7 @@ def _oracle_feed(moments, centers, bounds, steer, la, vego):
       mom.add(steer, la, k, in_bin=lo <= vego < hi)
 
 
-class TestBankMatchesReference:
+class TestBankMatchesReference(unittest.TestCase):
   """SpeedBinMomentBank must reproduce the per-bin SpeedBinMoment loop: same
   state, same fits, same validity, over a mixed random stream that includes
   out-of-range speeds and steers and ESS-cap saturation."""
@@ -1103,11 +1108,11 @@ class TestBankMatchesReference:
   def _assert_state_parity(self, moments, bank):
     for i, mom in enumerate(moments):
       assert np.allclose(bank.M[i], mom.M, rtol=1e-9, atol=1e-12), f"M mismatch bin {i}"
-      assert bank.S[i] == pytest.approx(mom.S, rel=1e-9, abs=1e-12)
-      assert bank.S_in[i] == pytest.approx(mom.S_in, rel=1e-9, abs=1e-12)
+      assert bank.S[i] == approx(mom.S, rtol=1e-9, atol=1e-12)
+      assert bank.S_in[i] == approx(mom.S_in, rtol=1e-9, atol=1e-12)
       assert np.allclose(bank.dens[i], mom.dens, rtol=1e-9, atol=1e-12), f"dens mismatch bin {i}"
 
-  @pytest.mark.parametrize("centers", [SPEED_BIN_CENTERS, MOMENT_SPEED_BIN_CENTERS])
+  @parameterized.expand([SPEED_BIN_CENTERS, MOMENT_SPEED_BIN_CENTERS])
   def test_state_and_fit_parity(self, centers):
     moments, bank = self._run_pair(centers, MOMENT_ESS_CAP)
     self._assert_state_parity(moments, bank)
@@ -1118,10 +1123,10 @@ class TestBankMatchesReference:
       ref = mom.fit(FRICTION_FACTOR) if mom.S > 0.0 else None
       assert bool(ok[i]) == (ref is not None), f"fit-ok mismatch bin {i}"
       if ref is not None:
-        assert slopes[i] == pytest.approx(ref[0], rel=1e-9, abs=1e-9)
-        assert frictions[i] == pytest.approx(ref[1], rel=1e-9, abs=1e-9)
+        assert slopes[i] == approx(ref[0], rtol=1e-9, atol=1e-9)
+        assert frictions[i] == approx(ref[1], rtol=1e-9, atol=1e-9)
       assert bool(valid[i]) == mom.is_valid(), f"validity mismatch bin {i}"
-      assert xs[i] == pytest.approx(mom.x_std(), rel=1e-9, abs=1e-12)
+      assert xs[i] == approx(mom.x_std(), rtol=1e-9, atol=1e-12)
 
   def test_parity_through_cap_saturation(self):
     # a tiny cap exercises the forgetting rescale on nearly every point
@@ -1138,9 +1143,9 @@ class TestBankMatchesReference:
         continue
       restored = SpeedBinMoment(STEER_BUCKET_BOUNDS)
       assert restored.load_cache(bank.to_cache(i))
-      assert restored.fit(FRICTION_FACTOR)[0] == pytest.approx(mom.fit(FRICTION_FACTOR)[0], rel=1e-9)
+      assert restored.fit(FRICTION_FACTOR)[0] == approx(mom.fit(FRICTION_FACTOR)[0], rtol=1e-9)
       assert bank2.load_cache(i, mom.to_cache())
-      assert bank2.S[i] == pytest.approx(mom.S)
+      assert bank2.S[i] == approx(mom.S)
     assert not bank2.load_cache(0, [0.1, 0.2])                # a point row
     assert not bank2.load_cache(0, [0.0] * MOMENT_CACHE_ROW)  # zero weight
 
