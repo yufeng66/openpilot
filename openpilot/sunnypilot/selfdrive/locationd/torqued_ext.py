@@ -47,7 +47,9 @@ MOMENT_SPEED_BIN_CENTERS = [round(mph * 0.44704, 3) for mph in range(15, 90, 5)]
 # compatible in one direction only - load_cache rejects rows with S above the
 # cap, so old (smaller-S) rows still load, but lowering it would drop them all.
 MOMENT_ESS_CAP = 24000.0
-MOMENT_DENSITY_CEILING = 7.0    # max inverse-density up-weight for rare steer ranges
+MOMENT_DENSITY_CEILING = 7.0    # max inverse-density up-weight, at MOMENT_DENSITY_CEILING_V[0] and below
+MOMENT_DENSITY_CEILING_HI = 15.0  # ... and at MOMENT_DENSITY_CEILING_V[1] and above
+MOMENT_DENSITY_CEILING_V = (MOMENT_SPEED_BIN_CENTERS[0], MOMENT_SPEED_BIN_CENTERS[-1])
 MOMENT_DENSITY_FLOOR = 0.1      # min down-weight for over-represented steer ranges
 MOMENT_SPEED_KERNEL_H = 3.0     # m/s, Gaussian speed kernel width
 MOMENT_KERNEL_MIN = 0.01        # ignore bins further than ~3 kernel widths away
@@ -63,6 +65,30 @@ MOMENT_MIN_XSTD = 0.06          # readiness: steer spread, i.e. the fit is ident
 MOMENT_FILTER_DECAY = 1.0
 MOMENT_MIN_LAT_ACCEL_FACTOR = 0.5
 MOMENT_CACHE_ROW = 16           # 6 unique moments + S + S_in + 8 density counters
+
+
+def moment_density_ceiling(centers):
+  """Per-bin cap on the inverse-density up-weight, ramped with speed.
+
+  The steer distribution narrows as speed rises. Measured on the Palisade cache
+  2026-08-23, |steer| > 0.3 is ~9% of accepted points at 25 mph but ~1% above
+  60 mph, so the inverse-density ratio the road asks for runs ~4 in the city and
+  17-43 on the highway. One flat ceiling therefore has to be either inert in the
+  city or clipped to a third of the intended big-move leverage on the highway —
+  and the highway bins are the ones whose slope is hardest to identify, because
+  large-steer points are what carry it. Ramping tracks the distribution instead:
+  inert at and below the low anchor, where bins already reach the equal-share
+  target that upstream's fixed-capacity steer buckets aim for, and opening up
+  only where the clip actually binds.
+
+  Deliberately stops well short of the ratio the top bins ask for: those tail
+  buckets hold ~1% of arrivals, so buying full equal-share up there costs most of
+  the bin's effective sample size (Kish ESS ~15% of raw evidence at ceiling 30 vs
+  ~23% at 15, measured on the same cache). np.interp clamps outside the anchors,
+  so a TOML speed_bp grid wider or narrower than the default stays well defined.
+  """
+  return np.interp(np.asarray(centers, dtype=float), MOMENT_DENSITY_CEILING_V,
+                   (MOMENT_DENSITY_CEILING, MOMENT_DENSITY_CEILING_HI))
 
 
 class SpeedBinMoment:
@@ -223,7 +249,7 @@ class SpeedBinMomentBank:
   """
 
   def __init__(self, centers, bounds, steer_bucket_bounds, ess_cap=MOMENT_ESS_CAP,
-               density_ceiling=MOMENT_DENSITY_CEILING):
+               density_ceiling=None):
     self.centers = np.asarray(centers, dtype=float)
     self.bounds = [(float(lo), float(hi)) for lo, hi in bounds]
     self.n = len(self.bounds)
@@ -238,7 +264,10 @@ class SpeedBinMomentBank:
     self.steer_edges = np.array([b[0] for b in steer_bounds] + [steer_bounds[-1][1]])
     self.speed_edges = np.array([b[0] for b in self.bounds] + [self.bounds[-1][1]])
     self.ess_cap = float(ess_cap)
-    self.density_ceiling = float(density_ceiling)
+    # per-bin, so np.clip below applies each bin's own ceiling elementwise; a
+    # scalar override broadcasts, and a wrong-length array fails here, not silently
+    self.density_ceiling = (moment_density_ceiling(self.centers) if density_ceiling is None else
+                            np.broadcast_to(np.asarray(density_ceiling, dtype=float), (self.n,)).copy())
     self.M = np.zeros((self.n, 3, 3))
     self.S = np.zeros(self.n)
     self.S_in = np.zeros(self.n)
