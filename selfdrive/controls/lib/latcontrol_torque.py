@@ -8,6 +8,7 @@ from openpilot.common.constants import ACCELERATION_DUE_TO_GRAVITY
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.common.pid import PIDController
+from dragonpilot.selfdrive.controls.lib.latcontrol_torque_jerk_aware import LatControlTorqueJerkAware
 
 # At higher speeds (25+mph) we can assume:
 # Lateral acceleration achieved by a specific car correlates to
@@ -45,6 +46,9 @@ class LatControlTorque(LatControl):
     self.lat_accel_request_buffer = deque([0.] * self.lat_accel_request_buffer_len , maxlen=self.lat_accel_request_buffer_len)
     self.lookahead_frames = int(JERK_LOOKAHEAD_SECONDS / self.dt)
     self.jerk_filter = FirstOrderFilter(0.0, 1 / (2 * np.pi * LP_FILTER_CUTOFF_HZ), self.dt)
+
+    # dp - Lateral Jerk Torque Controller (no-op unless dp_lat_jerk_torque is set)
+    self.extension = LatControlTorqueJerkAware(self, CP, CI)
 
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):
     self.torque_params.latAccelFactor = latAccelFactor
@@ -92,6 +96,14 @@ class LatControlTorque(LatControl):
       freeze_integrator = steer_limited_by_safety or CS.steeringPressed or CS.vEgo < 5
       output_lataccel = self.pid.update(pid_log.error, speed=CS.vEgo, feedforward=ff, freeze_integrator=freeze_integrator)
       output_torque = self.torque_from_lateral_accel(output_lataccel, self.torque_params)
+
+      # dp - Lateral Jerk Torque Controller: redoes the loop in torque space with a
+      # model-based jerk friction input. Overrides pid_log.error and output_torque;
+      # returns them unchanged when the toggle is off.
+      pid_log, output_torque = self.extension.update(CS, VM, self.pid, pid_log, roll_compensation,
+                                                     future_desired_lateral_accel, measurement,
+                                                     lateral_accel_deadzone, gravity_adjusted_future_lateral_accel,
+                                                     setpoint, measurement, steer_limited_by_safety, output_torque)
 
       pid_log.active = True
       pid_log.p = float(self.pid.p)

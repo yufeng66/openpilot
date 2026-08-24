@@ -53,11 +53,12 @@ def build_speed_dep_bp(speed_bp, factors, frictions, valid_bp, seed_lafs, seed_f
   return list(speed_bp), [global_laf] * n, [global_fric] * n
 
 
-def interp_live_torque_params(tp, v_ego, car_cfg=None):
+def interp_live_torque_params(tp, v_ego, car_cfg=None, friction_reduction=0):
   """(latAccelFactor, latAccelOffset, friction) to apply at v_ego.
 
   With the learner off (no speedBinCenters in the message) this returns the
-  stock global filtered values, so the caller's behavior is unchanged.
+  stock global filtered values, so the caller's behavior is unchanged --
+  friction_reduction scales learned bins only and is therefore inert here too.
   latAccelOffset is not speed-binned and always passes through."""
   speed_bp = list(tp.speedBinCenters)
   if not speed_bp:
@@ -67,7 +68,7 @@ def interp_live_torque_params(tp, v_ego, car_cfg=None):
   bp_speeds, laf_bp, fric_bp = build_speed_dep_bp(
     speed_bp, list(tp.speedBinLatAccelFactors), list(tp.speedBinFrictions), list(tp.speedBinValid),
     cfg.get('laf_bp'), cfg.get('friction_bp'),
-    tp.latAccelFactorFiltered, tp.frictionCoefficientFiltered)
+    tp.latAccelFactorFiltered, tp.frictionCoefficientFiltered, friction_reduction)
 
   return (float(np.interp(v_ego, bp_speeds, laf_bp)),
           tp.latAccelOffsetFiltered,

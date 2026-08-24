@@ -13,4 +13,23 @@ ITEMS = [
     "param_type": "BOOL",
     "default": "0",
   },
+  {
+    "section": "Lateral",
+    "key": "dp_lat_torqued_sd_friction",
+    "type": "spin_button_item",
+    "title": lambda: tr("Friction Reduction"),
+    "description": lambda: tr("Lower the learned friction the controller applies, which can make steering feel smoother. " +
+                              "Each step is -10%, and only speed bins the learner has validated are scaled. " +
+                              "Read once at engage, so change it with the car off."),
+    "brands": ["toyota", "hyundai", "honda", "volkswagen", "rivian"],
+    "depends_on": "dp_lat_torqued_sd == 1",
+    "needs_restart": True,
+    "default": "0",
+    "min_val": 0,
+    "max_val": 9,
+    "step": 1,
+    "suffix": lambda: tr(" x -10%"),
+    "flags": "PERSISTENT",
+    "param_type": "INT",
+  },
 ]

@@ -66,6 +66,11 @@ class Controls:
 
     # dp - speed-dependent torque learner: per-car seed curve, if one is shipped
     self.speed_dep_cfg = SPEED_DEP_CAR_CONFIG.get(self.CP.carFingerprint)
+    # dp - Friction Reduction: read once here rather than polled. controlsd is
+    # gated on `started`, so this is a fresh read at the start of every drive and
+    # the setting is deliberately offroad-only, matching the rest of the dp
+    # lateral tuning knobs.
+    self.friction_reduction = int(self.params.get("dp_lat_torqued_sd_friction", return_default=True) or 0)
 
   def update(self):
     self.sm.update(15)
@@ -87,6 +92,8 @@ class Controls:
     steer_angle_without_offset = math.radians(CS.steeringAngleDeg - lp.angleOffsetDeg)
     self.curvature = -self.VM.calc_curvature(steer_angle_without_offset, CS.vEgo, lp.roll)
 
+    model_v2 = self.sm['modelV2']
+
     # Update Torque Params
     if self.CP.lateralTuning.which() == 'torque':
       torque_params = self.sm['liveTorqueParameters']
@@ -94,11 +101,16 @@ class Controls:
         # dp - speed-dependent torque learner: interpolate the per-bin learned
         # values at the current speed. With the learner off the message carries
         # no bins and this is exactly the stock filtered values.
-        laf, lao, friction = interp_live_torque_params(torque_params, CS.vEgo, self.speed_dep_cfg)
+        laf, lao, friction = interp_live_torque_params(torque_params, CS.vEgo, self.speed_dep_cfg,
+                                                       self.friction_reduction)
         self.LaC.update_live_torque_params(laf, lao, friction)
 
+      # dp - Lateral Jerk Torque Controller: feed it the model it looks ahead in.
+      # No-op while the toggle is off. The PID bounds it needs are set inside its
+      # own update(), so there is no ordering constraint against the call above.
+      self.LaC.extension.update_model_v2(model_v2)
+
     long_plan = self.sm['longitudinalPlan']
-    model_v2 = self.sm['modelV2']
 
     CC = car.CarControl.new_message()
     CC.enabled = self.sm['selfdriveState'].enabled
@@ -142,6 +154,8 @@ class Controls:
       new_desired_curvature = model_v2.action.desiredCurvature if CC.latActive else self.curvature
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
+    if self.CP.lateralTuning.which() == 'torque':
+      self.LaC.extension.update_lateral_lag(lat_delay)
 
     actuators.curvature = self.desired_curvature
     steer, steeringAngleDeg, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,

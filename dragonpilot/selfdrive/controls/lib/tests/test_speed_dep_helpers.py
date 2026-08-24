@@ -126,3 +126,36 @@ class TestInterpLiveTorqueParams:
     laf, _, fric = interp_live_torque_params(tp, 20.0, cfg)
     assert laf == pytest.approx(3.1)     # seed replaces the invalid middle bin
     assert fric == pytest.approx(0.21)
+
+
+class TestInterpFrictionReduction:
+  """The Friction Reduction setting (dp_lat_torqued_sd_friction) reaches the
+  controller through interp_live_torque_params' last argument."""
+
+  def test_scales_learned_friction_and_leaves_laf_alone(self):
+    tp = make_tp(SPEED_BP, [2.0, 2.4, 2.8], [0.10, 0.14, 0.18], [True, True, True])
+    base_laf, _, base_fric = interp_live_torque_params(tp, 15.0)
+    laf, _, fric = interp_live_torque_params(tp, 15.0, None, 3)
+    assert laf == pytest.approx(base_laf)          # only friction is touched
+    assert fric == pytest.approx(base_fric * 0.7)
+
+  def test_zero_is_a_no_op(self):
+    tp = make_tp(SPEED_BP, [2.0, 2.4, 2.8], [0.10, 0.14, 0.18], [True, True, True])
+    assert interp_live_torque_params(tp, 15.0, None, 0) == interp_live_torque_params(tp, 15.0)
+
+  def test_inert_when_the_learner_is_off(self):
+    """No bins in the message means the learner is off; the setting must not
+    quietly reduce the global learner's friction."""
+    tp = make_tp()
+    assert interp_live_torque_params(tp, 20.0, None, 9) == interp_live_torque_params(tp, 20.0)
+
+  def test_seeded_bins_are_not_reduced(self):
+    tp = make_tp(SPEED_BP, [2.0, 9.9, 2.8], [0.10, 9.9, 0.18], [True, False, True])
+    cfg = {'laf_bp': [3.0, 3.1, 3.2], 'friction_bp': [0.2, 0.21, 0.22]}
+    _, _, fric = interp_live_torque_params(tp, 20.0, cfg, 5)
+    assert fric == pytest.approx(0.21)   # seed value, untouched by the scale
+
+  def test_max_step_keeps_friction_positive(self):
+    tp = make_tp(SPEED_BP, [2.0, 2.4, 2.8], [0.10, 0.14, 0.18], [True, True, True])
+    _, _, fric = interp_live_torque_params(tp, 15.0, None, 9)
+    assert 0.0 < fric < 0.12 * 0.11

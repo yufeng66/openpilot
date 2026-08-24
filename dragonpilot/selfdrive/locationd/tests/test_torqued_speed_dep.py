@@ -18,6 +18,7 @@ from dragonpilot.selfdrive.locationd.torqued_ext import (
   MOMENT_ESS_CAP, MOMENT_MIN_ESS, MOMENT_MIN_XSTD, MOMENT_CACHE_ROW,
   MOMENT_DENSITY_CEILING, MOMENT_DENSITY_FLOOR, MOMENT_SPEED_KERNEL_H, MOMENT_KERNEL_MIN,
   MOMENT_MIN_IN_BIN_ESS, MOMENT_MIN_LAT_ACCEL_FACTOR, SPEED_BIN_MIN, SPEED_BIN_MAX,
+  MOMENT_DENSITY_CEILING_HI, MOMENT_DENSITY_CEILING_V, moment_density_ceiling,
 )
 
 # Both Params locations need mocking: torqued.py (cache) and torqued_ext.py (toggle)
@@ -656,6 +657,65 @@ def _oracle_feed(moments, centers, bounds, steer, la, vego):
       mom.add(steer, la, k, in_bin=lo <= vego < hi)
 
 
+class TestDensityCeilingRamp:
+  """The inverse-density ceiling ramps with speed so highway bins get the big-move
+  leverage the road cannot supply on its own, while city bins keep exactly the
+  weighting they have today."""
+
+  def test_anchors_and_clamping(self):
+    lo_v, hi_v = MOMENT_DENSITY_CEILING_V
+    assert moment_density_ceiling([lo_v])[0] == pytest.approx(MOMENT_DENSITY_CEILING)
+    assert moment_density_ceiling([hi_v])[0] == pytest.approx(MOMENT_DENSITY_CEILING_HI)
+    # np.interp clamps, so a car-config grid outside the anchors never extrapolates
+    assert moment_density_ceiling([0.0])[0] == pytest.approx(MOMENT_DENSITY_CEILING)
+    assert moment_density_ceiling([lo_v - 5.0])[0] == pytest.approx(MOMENT_DENSITY_CEILING)
+    assert moment_density_ceiling([hi_v + 20.0])[0] == pytest.approx(MOMENT_DENSITY_CEILING_HI)
+
+  def test_monotone_over_the_default_grid(self):
+    c = moment_density_ceiling(MOMENT_SPEED_BIN_CENTERS)
+    assert len(c) == len(MOMENT_SPEED_BIN_CENTERS)
+    assert np.all(np.diff(c) >= 0.0)
+    assert c[0] == pytest.approx(MOMENT_DENSITY_CEILING)
+    assert c[-1] == pytest.approx(MOMENT_DENSITY_CEILING_HI)
+
+  def _feed(self, bank, n_pts=3000, seed=41):
+    rng = np.random.default_rng(seed)
+    steers = rng.normal(0.0, 0.12, n_pts)      # narrow, the way real steering is
+    vegos = rng.uniform(6.0, 39.0, n_pts)
+    las = 2.6 * steers + rng.normal(0.0, 0.05, n_pts)
+    for s, la, v in zip(steers, las, vegos, strict=True):
+      bank.add(float(s), float(la), float(v))
+    return bank
+
+  def test_low_anchor_bin_is_untouched_and_the_top_bin_is_not(self):
+    """The reason for anchoring the ramp at the bottom: city bins already hit the
+    equal-share target, so the change must be provably inert there."""
+    centers = list(MOMENT_SPEED_BIN_CENTERS)
+    bounds = TorqueEstimatorExt._centers_to_bounds(centers)
+    ramped = self._feed(SpeedBinMomentBank(centers, bounds, STEER_BUCKET_BOUNDS))
+    flat = self._feed(SpeedBinMomentBank(centers, bounds, STEER_BUCKET_BOUNDS,
+                                         density_ceiling=MOMENT_DENSITY_CEILING))
+    # a bin's weighting reads only its own dens row and its own ceiling, so the
+    # low-anchor bin comes out bit-identical, not merely close
+    assert np.array_equal(ramped.M[0], flat.M[0])
+    assert np.array_equal(ramped.dens[0], flat.dens[0])
+    assert ramped.S[0] == flat.S[0]
+    # and the change has to actually bite at the top, or the ramp is pointless
+    assert not np.allclose(ramped.M[-1], flat.M[-1])
+    # up-weighting starved tail buckets widens the weighted steer spread, which is
+    # exactly the leverage the top bin's slope was missing
+    assert ramped.x_std()[-1] > flat.x_std()[-1]
+
+  def test_scalar_override_still_supported(self):
+    centers = list(MOMENT_SPEED_BIN_CENTERS)
+    bounds = TorqueEstimatorExt._centers_to_bounds(centers)
+    bank = SpeedBinMomentBank(centers, bounds, STEER_BUCKET_BOUNDS, density_ceiling=9.0)
+    assert bank.density_ceiling.shape == (len(centers),)
+    assert np.all(bank.density_ceiling == 9.0)
+    with pytest.raises(ValueError):
+      SpeedBinMomentBank(centers, bounds, STEER_BUCKET_BOUNDS, density_ceiling=[1.0, 2.0])
+
+
 class TestBankMatchesReference:
   """SpeedBinMomentBank must reproduce the per-bin SpeedBinMoment loop: same
   state, same fits, same validity, over a mixed random stream that includes
@@ -664,7 +724,9 @@ class TestBankMatchesReference:
   def _run_pair(self, centers, ess_cap, n_pts=4000, seed=101):
     centers = list(centers)
     bounds = TorqueEstimatorExt._centers_to_bounds(centers)
-    moments = [SpeedBinMoment(STEER_BUCKET_BOUNDS, ess_cap=ess_cap) for _ in centers]
+    ceilings = moment_density_ceiling(centers)
+    moments = [SpeedBinMoment(STEER_BUCKET_BOUNDS, ess_cap=ess_cap, density_ceiling=c)
+               for c in ceilings]
     bank = SpeedBinMomentBank(centers, bounds, STEER_BUCKET_BOUNDS, ess_cap=ess_cap)
     rng = np.random.default_rng(seed)
     steers = rng.uniform(-0.6, 0.6, n_pts)     # some outside the tracked steer range
