@@ -18,8 +18,10 @@ ITEMS = [
     "key": "dp_lat_torqued_sd_friction",
     "type": "spin_button_item",
     "title": lambda: tr("Friction Reduction"),
-    "description": lambda: tr("Lower the learned friction the controller applies, which can make steering feel smoother. " +
-                              "Each step is -10%, and only speed bins the learner has validated are scaled. " +
+    # implicit string concatenation, not "+": xgettext only extracts adjacent
+    # literals, so a "+"-joined msgid never reaches the .po files
+    "description": lambda: tr("Lower the learned friction the controller applies, which can make steering feel smoother. "  # noqa: ISC002
+                              "Each step is -10%, and only speed bins the learner has validated are scaled. "  # noqa: ISC002
                               "Read once at engage, so change it with the car off."),
     "brands": ["toyota", "hyundai", "honda", "volkswagen", "rivian"],
     "depends_on": "dp_lat_torqued_sd == 1",
