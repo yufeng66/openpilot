@@ -106,8 +106,9 @@ class Controls:
         self.LaC.update_live_torque_params(laf, lao, friction)
 
       # dp - Lateral Jerk Torque Controller: feed it the model it looks ahead in.
-      # No-op while the toggle is off. The PID bounds it needs are set inside its
-      # own update(), so there is no ordering constraint against the call above.
+      # No-op while the toggle is off. The torque-space PID bounds it needs are
+      # re-pinned at the top of LatControlTorque.update(), after the limit reset
+      # in update_live_torque_params() above, so ordering here does not matter.
       self.LaC.extension.update_model_v2(model_v2)
 
     long_plan = self.sm['longitudinalPlan']

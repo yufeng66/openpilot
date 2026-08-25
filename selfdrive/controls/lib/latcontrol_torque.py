@@ -61,6 +61,14 @@ class LatControlTorque(LatControl):
                         self.lateral_accel_from_torque(-self.steer_max, self.torque_params))
 
   def update(self, active, CS, VM, params, steer_limited_by_safety, desired_curvature, curvature_limited, lat_delay):
+    # dp - Lateral Jerk Torque Controller: re-pin the shared PID to torque-space
+    # bounds BEFORE the pid.update() below. update_live_torque_params() (called by
+    # controlsd every frame) resets the limits to lat-accel space; the PID is
+    # shared with the extension, so leaving this write latAccelFactor x looser
+    # than steer_max lets the integrator wind past the real actuation ceiling.
+    # No-op while the toggle is off, and on the first frame (before the extension
+    # holds the PID) the extension's own update() re-pins before its write.
+    self.extension.update_limits()
     pid_log = log.ControlsState.LateralTorqueState.new_message()
     pid_log.version = VERSION
     measured_curvature = -VM.calc_curvature(math.radians(CS.steeringAngleDeg - params.angleOffsetDeg), CS.vEgo, params.roll)

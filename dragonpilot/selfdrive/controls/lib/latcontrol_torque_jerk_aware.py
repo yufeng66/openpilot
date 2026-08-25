@@ -47,11 +47,15 @@ class LatControlTorqueJerkAware(LatControlTorqueExtBase):
     lat-accel space (steer_max * latAccelFactor); once the loop runs on torque the
     bound is steer_max itself, and it also governs integrator anti-windup.
 
-    Called from update() rather than from controlsd (where sunnypilot calls it), so
-    the bound is re-established inside the same frame that uses it. The host resets
-    the limits on every update_live_torque_params(), which with the speed-dependent
-    learner on is essentially every frame, and a caller-side call is easy to get on
-    the wrong side of that."""
+    The PID is shared, so this tighter bound must govern BOTH of the frame's
+    writes, not just the extension's own. LatControlTorque.update() therefore
+    calls this at its top, after controlsd's per-frame update_live_torque_params()
+    has reset the limits to lat-accel space and before the host's pid.update();
+    update() below calls it again, which re-pins on the first frame (when _pid is
+    not bound yet at the top-of-frame call). Setting the bound only around the
+    extension's write anchors anti-windup latAccelFactor x above steer_max and
+    the integrator winds until the output pins at steer_max (measured: i 1.05 at
+    bound 1.0 under a steady tracking error)."""
     if not self._jerk_aware_enabled or self._pid is None:
       return
     self._pid.set_limits(self.lac_torque.steer_max, -self.lac_torque.steer_max)

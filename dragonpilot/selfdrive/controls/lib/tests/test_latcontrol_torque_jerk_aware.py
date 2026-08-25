@@ -138,8 +138,8 @@ class TestDisabled:
     assert (pid.i, pid.pos_limit, pid.neg_limit) == before
 
   def test_update_limits_before_first_update_is_safe(self):
-    """controlsd calls update_limits() every frame, including before the first
-    update() has handed over the host's PID."""
+    """LatControlTorque.update() calls this at its top every frame, including
+    before the first extension update() has handed over the host's PID."""
     make_ext(True).update_limits()   # must not raise on _pid = None
 
 
@@ -162,8 +162,10 @@ class TestEnabled:
     assert out_torque == pytest.approx(pid.control)
 
   def test_update_moves_the_host_pid_into_torque_space_by_itself(self):
-    """No caller-side update_limits() needed: update() sets the bound in the same
-    frame it uses it, so it cannot land on the wrong side of the host's reset."""
+    """update() re-pins the bound before its own PID write. This is the safety
+    net for the first frame: the host's top-of-update() call is a no-op until
+    update() has bound the PID, so this internal re-pin bounds the extension's
+    write even then."""
     lac = make_lac(steer_max=1.0, lat_accel_factor=2.5)
     ext = make_ext(True, lac=lac)
     pid = make_pid()

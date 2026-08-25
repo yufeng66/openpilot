@@ -155,8 +155,9 @@ class TestEnabledChangesTheLoop:
     assert lac.pid.update.call_count == 2
 
   def test_output_stays_within_torque_limits_without_any_caller_help(self):
-    """update() re-establishes its own bounds, so a hard demand cannot push past
-    steer_max even though the host resets the limits to lat-accel space first."""
+    """No caller-side ordering needed: update() re-pins the torque-space bounds
+    at its top, after update_live_torque_params() has reset them to lat-accel
+    space, so a hard demand cannot push past steer_max."""
     lac = make_lac(True)
     lac.extension.update_model_v2(make_model(slope=3.0))
     for _ in range(50):
@@ -164,6 +165,46 @@ class TestEnabledChangesTheLoop:
       torque, _, _ = lac.update(True, make_CS(), make_VM(), make_params(), False, 0.05, False, 0.15)
     assert abs(torque) <= lac.steer_max + 1e-9
     assert (lac.pid.pos_limit, lac.pid.neg_limit) == (lac.steer_max, -lac.steer_max)
+
+  def test_both_pid_writes_run_under_torque_bounds(self):
+    """The PID is shared, so the torque-space bound must govern the host's
+    lat-accel-space write too, not just the extension's. Before the fix the
+    host's write ran at steer_max * latAccelFactor and anti-windup was anchored
+    above the real actuation ceiling."""
+    lac = make_lac(True)
+    lac.extension.update_model_v2(make_model())
+    limits_at_write = []
+    orig_update = lac.pid.update
+
+    def spy(*args, **kwargs):
+      limits_at_write.append((lac.pid.pos_limit, lac.pid.neg_limit))
+      return orig_update(*args, **kwargs)
+    lac.pid.update = spy
+
+    # frame 1 binds the host PID to the extension; from frame 2 the
+    # top-of-update() re-pin covers both writes
+    for _ in range(2):
+      lac.update_live_torque_params(LAT_ACCEL_FACTOR, 0.03, FRICTION)
+      lac.update(True, make_CS(), make_VM(), make_params(), False, 0.001, False, 0.15)
+    assert limits_at_write[2:] == [(lac.steer_max, -lac.steer_max)] * 2
+
+  def test_integrator_stays_bounded_under_sustained_error(self):
+    """Windup regression: under a long steady tracking error with the controlsd
+    per-frame limit reset, the integrator must respect steer_max. Before the fix
+    it wound to ~1.05 (in a 1.0 bound) because the host's write ran under
+    lat-accel-space limits and the extension's write can only freeze it."""
+    lac = make_lac(True)
+    lac.extension.update_model_v2(make_model(slope=0.0))
+    CS = make_CS()
+    CS.steeringAngleDeg, CS.steeringRateDeg = 1.0, 0.0
+    max_i, max_torque = 0.0, 0.0
+    for _ in range(1500):
+      lac.update_live_torque_params(LAT_ACCEL_FACTOR, 0.0, FRICTION)
+      torque, _, _ = lac.update(True, CS, make_VM(), make_params(), False, 0.0006, False, 0.15)
+      max_i = max(max_i, abs(lac.pid.i))
+      max_torque = max(max_torque, abs(torque))
+    assert max_i <= lac.steer_max + 1e-6, f"integrator wound past steer_max: {max_i:.4f}"
+    assert max_torque <= lac.steer_max + 1e-6
 
   def test_disabled_leaves_the_host_lat_accel_limits_alone(self):
     lac = make_lac(False)
