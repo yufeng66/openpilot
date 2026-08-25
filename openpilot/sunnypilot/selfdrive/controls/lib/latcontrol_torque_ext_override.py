@@ -26,32 +26,44 @@ class LatControlTorqueExtOverride:
     self._speed_dep_car_cfg = None
     self._last_vego = 0.0
 
-  def update_override_torque_params(self, torque_params) -> bool:
-    changed = False
+  def update_limits(self):
+    # No-op hook for standalone use (tests). In the production mixin
+    # (LatControlTorqueExt) the MRO resolves update_limits() to the NNLC/jerk-aware
+    # implementations, which re-pin the shared PID to torque-space bounds when
+    # those toggles are armed.
+    pass
 
+  def update_override_torque_params(self, torque_params) -> bool:
     # Speed-dep latAccelFactor and friction: interpolate by current speed each frame.
     # Must run here (before get_friction and torque_from_lateral_accel use
     # torque_params) because extension.update() runs after those calls.
     if self._speed_dep_active and self._speed_dep_speed_bp:
-      new_lat_accel_factor = float(np.interp(self._last_vego, self._speed_dep_speed_bp, self._speed_dep_lat_accel_factor_bp))
-      new_fric = float(np.interp(self._last_vego, self._speed_dep_speed_bp, self._speed_dep_friction_bp))
-      if new_lat_accel_factor != torque_params.latAccelFactor or new_fric != torque_params.friction:
-        torque_params.latAccelFactor = new_lat_accel_factor
-        torque_params.friction = new_fric
-        changed = True
+      torque_params.latAccelFactor = float(np.interp(self._last_vego, self._speed_dep_speed_bp, self._speed_dep_lat_accel_factor_bp))
+      torque_params.friction = float(np.interp(self._last_vego, self._speed_dep_speed_bp, self._speed_dep_friction_bp))
+      # Re-derive the PID limits here and report no change, instead of returning
+      # True: the caller reacts to True with its own update_limits(), which runs
+      # after controlsd has already pinned the shared PID to torque-space bounds
+      # for the jerk/NNLC controllers, re-anchoring integrator anti-windup a
+      # factor latAccelFactor above steer_max (measured: integrator winds to ~2x
+      # steer_max, commanded torque ~2.5x). lac_torque.update_limits() applies
+      # the lat-accel-space bounds for the new params — what the caller's True
+      # branch would have done — and self.update_limits() then re-pins torque
+      # space when jerk/NNLC is armed (no-op otherwise).
+      self.lac_torque.update_limits()
+      self.update_limits()
 
     if not self.enforce_torque_control_toggle:
-      return changed
+      return False
 
     self.frame += 1
     if self.frame % 300 == 0:
       self.torque_override_enabled = self.params.get_bool("TorqueParamsOverrideEnabled")
 
       if not self.torque_override_enabled:
-        return changed
+        return False
 
       torque_params.latAccelFactor = float(self.params.get("TorqueParamsOverrideLatAccelFactor", return_default=True))
       torque_params.friction = float(self.params.get("TorqueParamsOverrideFriction", return_default=True))
       return True
 
-    return changed
+    return False

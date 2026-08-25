@@ -11,8 +11,13 @@ inherits from NNLC and requires model files to init.
 import numpy as np
 import unittest
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from opendbc.car.structs import car
 from opendbc.sunnypilot.car.interfaces import get_speed_dep_config
+from openpilot.common.realtime import DT_CTRL
+from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
+from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext import LatControlTorqueExt
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext_override import LatControlTorqueExtOverride
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_dep_helpers import friction_scale
@@ -24,6 +29,8 @@ SPEED_DEP_CARS = get_speed_dep_config()
 # param prefix, and OpenpilotTestCase's fixture shim reads a test's signature - which @patch
 # rewrites - so the injected mock arguments would be mistaken for fixtures.
 PATCH_PARAMS_OVERRIDE = 'openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext_override.Params'
+PATCH_PARAMS_JERK_AWARE = 'openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_jerk_aware.Params'
+PATCH_PARAMS_NNLC = 'openpilot.sunnypilot.selfdrive.controls.lib.nnlc.nnlc.Params'
 PATCH_PARAMS_TORQUED_EXT = 'openpilot.sunnypilot.selfdrive.locationd.torqued_ext.Params'
 PATCH_PARAMS_TORQUED = 'openpilot.selfdrive.locationd.torqued.Params'
 PATCH_GET_SPEED_DEP_CONFIG = 'opendbc.sunnypilot.car.interfaces.get_speed_dep_config'
@@ -58,6 +65,9 @@ def make_override(mock_params_cls, enforce=False, manual_override=False,
 
   CP = MagicMock()
   ovr = LatControlTorqueExtOverride(CP)
+  # Production provides lac_torque via LatControlTorqueExtBase; the speed-dep
+  # block calls lac_torque.update_limits() after applying interpolated params.
+  ovr.lac_torque = MagicMock()
   return ovr
 
 
@@ -212,32 +222,54 @@ class TestManualOverridePriority(unittest.TestCase):
       "Without manual override, speed-dep should be used"
 
 
-class TestChangeDetection(unittest.TestCase):
-  """update_override_torque_params should only return changed=True when values differ."""
+class TestSpeedDepLimitHandling(unittest.TestCase):
+  """The speed-dep block must re-derive the PID limits itself and never report
+  changed=True. Returning True makes LatControlTorque.update() call its own
+  update_limits() AFTER controlsd has pinned the shared PID to torque-space
+  bounds for the jerk/NNLC controllers, which re-anchors integrator anti-windup
+  a factor latAccelFactor above steer_max (windup to ~2x steer_max, commanded
+  torque ~2.5x, reproduced 2026-08-23)."""
 
-  def test_no_change_returns_false(self):
-    ovr = make_override()
-    activate_speed_dep(ovr)
-    ovr._last_vego = 15.0
-
-    tp = TorqueParams()
-    # First call sets values
-    ovr.update_override_torque_params(tp)
-    # Second call at same speed — no change
-    changed = ovr.update_override_torque_params(tp)
-    assert not changed, "Should return False when values haven't changed"
-
-  def test_speed_change_returns_true(self):
+  def test_never_reports_changed(self):
     ovr = make_override()
     activate_speed_dep(ovr)
 
     tp = TorqueParams()
     ovr._last_vego = 6.5
+    assert ovr.update_override_torque_params(tp) is False
+
+    ovr._last_vego = 37.5  # big speed change -> values change, still not reported
+    assert ovr.update_override_torque_params(tp) is False, \
+      "speed-dep must never return True: the caller would re-widen the pinned torque-space limits"
+
+  def test_rederives_both_limit_spaces(self):
+    ovr = make_override()
+    activate_speed_dep(ovr)
+    ovr.update_limits = MagicMock()  # instance spy over the extension hook
+    tp = TorqueParams()
+    ovr._last_vego = 15.0
+
     ovr.update_override_torque_params(tp)
 
-    ovr._last_vego = 37.5  # big speed change -> values change
-    changed = ovr.update_override_torque_params(tp)
-    assert changed, "Should return True when values changed"
+    ovr.lac_torque.update_limits.assert_called_once()  # lat-accel bounds for the new params
+    ovr.update_limits.assert_called_once()  # torque-space re-pin (no-op unless jerk/NNLC armed)
+
+  def test_inactive_touches_no_limits(self):
+    ovr = make_override()
+    ovr.update_limits = MagicMock()
+    tp = TorqueParams()
+    ovr._last_vego = 15.0
+
+    ovr.update_override_torque_params(tp)
+
+    ovr.lac_torque.update_limits.assert_not_called()
+    ovr.update_limits.assert_not_called()
+
+  def test_manual_override_still_reports_changed(self):
+    ovr = make_override(enforce=True, manual_override=True)
+    tp = TorqueParams()
+    # frame = -1, after +1 -> frame=0, 0 % 300 == 0 -> manual fires (upstream path)
+    assert ovr.update_override_torque_params(tp) is True
 
 
 class TestLearnerSanityBounds(unittest.TestCase):
@@ -628,3 +660,89 @@ class TestExtrapolationAtBoundaries(unittest.TestCase):
       ovr.update_override_torque_params(tp)
       assert tp.latAccelFactor == approx(SAMPLE_LAT_ACCEL_FACTOR_BP[i], atol=1e-4)
       assert tp.friction == approx(SAMPLE_FRICTION_BP[i], atol=1e-4)
+
+
+class TestJerkControllerWindupBounded(unittest.TestCase):
+  """Full-controller regression for speed-dep + Lateral Jerk Torque Controller.
+
+  With both armed, every write to the shared PID must run under torque-space
+  bounds. Before the fix, the speed-dep changed=True return made
+  LatControlTorque.update() re-widen the limits to lat-accel space every frame
+  (after controlsd's torque-space pinning), so the integrator wound to ~2x
+  steer_max and the controller returned ~2.5x steer_max."""
+
+  LAF, FRIC, SR, WB = 2.5, 0.12, 15.0, 2.7
+  FRAMES = 1200  # windup previously exceeded steer_max by frame ~319
+
+  def _make_controller(self, jerk_on):
+    def flags(k):
+      return {'LateralJerkTorqueController': jerk_on}.get(k, False)
+
+    CP = car.CarParams.new_message()
+    CP.steerLimitTimer = 0.4
+    CP.steerActuatorDelay = 0.12
+    CP.steerRatio = self.SR
+    t = CP.lateralTuning.init('torque')
+    t.latAccelFactor = self.LAF
+    t.friction = self.FRIC
+
+    CI = MagicMock()
+    CI.torque_from_lateral_accel.return_value = lambda la, tp: la / tp.latAccelFactor
+    CI.lateral_accel_from_torque.return_value = lambda torque, tp: torque * tp.latAccelFactor
+    CI.torque_from_lateral_accel_in_torque_space.return_value = (
+      lambda inp, tp, gravity_adjusted: inp.lateral_acceleration / float(tp.latAccelFactor))
+
+    CP_SP = MagicMock()
+    CP_SP.neuralNetworkLateralControl.model.path = ''
+
+    patchers = [patch(p) for p in (PATCH_PARAMS_OVERRIDE, PATCH_PARAMS_JERK_AWARE, PATCH_PARAMS_NNLC)]
+    for p in patchers:
+      mock_inst = p.start().return_value
+      mock_inst.get_bool.side_effect = flags
+      mock_inst.get.side_effect = lambda k, **kw: None
+      self.addCleanup(p.stop)
+    return LatControlTorque(CP.as_reader(), CP_SP, CI, DT_CTRL)
+
+  def _run_steady_error(self, lac, v_ego=25.0):
+    ext = lac.extension
+    n = len(ModelConstants.T_IDXS)
+    ext.update_model_v2(SimpleNamespace(acceleration=SimpleNamespace(y=[0.0] * n),
+                                        orientation=SimpleNamespace(x=[0.0] * n)))
+    ext.update_lateral_lag(0.15)
+    ext._speed_dep_active = True
+    ext._speed_dep_speed_bp = [5.0, 20.0, 40.0]
+    ext._speed_dep_lat_accel_factor_bp = [self.LAF] * 3
+    ext._speed_dep_friction_bp = [self.FRIC] * 3
+
+    VM = MagicMock()
+    VM.calc_curvature.side_effect = lambda angle, v, roll: angle / (self.SR * self.WB)
+    CS = SimpleNamespace(vEgo=v_ego, aEgo=0.0, steeringAngleDeg=1.0, steeringRateDeg=0.0, steeringPressed=False)
+    vehicle_params = SimpleNamespace(roll=0.0, angleOffsetDeg=0.0)
+
+    max_i, max_torque = 0.0, 0.0
+    for _ in range(self.FRAMES):
+      # controlsd per-frame sequence: global params, then the extension's torque-space pinning
+      lac.update_torque_parameters(self.LAF, 0.0, self.FRIC)
+      lac.extension.update_limits()
+      torque, _, _ = lac.update(True, CS, VM, vehicle_params, False, 0.0006, None, False, 0.15)
+      max_i = max(max_i, abs(lac.pid.i))
+      max_torque = max(max_torque, abs(torque))
+    return max_i, max_torque
+
+  def test_jerk_on_stays_bounded_at_steer_max(self):
+    lac = self._make_controller(jerk_on=True)
+    max_i, max_torque = self._run_steady_error(lac)
+
+    assert lac.pid.pos_limit == approx(lac.steer_max), \
+      "with the jerk controller armed, speed-dep must not re-widen the torque-space limits"
+    assert max_i <= lac.steer_max + 1e-6, f"integrator wound past steer_max: {max_i:.4f}"
+    assert max_torque <= lac.steer_max + 1e-6, f"commanded torque exceeded steer_max: {max_torque:.4f}"
+
+  def test_jerk_off_keeps_lat_accel_limits(self):
+    lac = self._make_controller(jerk_on=False)
+    max_i, max_torque = self._run_steady_error(lac)
+
+    # stock behavior: limits in lat-accel space, derived from the speed-interpolated params
+    assert lac.pid.pos_limit == approx(lac.steer_max * self.LAF), \
+      "with the jerk controller off, speed-dep must still apply lat-accel-space limits"
+    assert max_torque <= lac.steer_max + 1e-6
