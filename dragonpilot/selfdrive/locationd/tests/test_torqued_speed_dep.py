@@ -716,6 +716,33 @@ class TestDensityCeilingRamp:
       SpeedBinMomentBank(centers, bounds, STEER_BUCKET_BOUNDS, density_ceiling=[1.0, 2.0])
 
 
+class TestSpeedBinMomentCenterCeiling:
+  """SpeedBinMoment(center=...) must resolve the same ramped density ceiling the
+  production bank uses for that bin, so offline replays weight points exactly
+  like the device instead of silently reproducing the flat pre-ramp ceiling."""
+
+  def test_center_resolves_the_ramped_ceiling(self):
+    for c in (MOMENT_SPEED_BIN_CENTERS[0], 20.0, MOMENT_SPEED_BIN_CENTERS[-1], 99.0):
+      mom = SpeedBinMoment(STEER_BUCKET_BOUNDS, center=c)
+      assert mom.density_ceiling == pytest.approx(float(moment_density_ceiling(c)))
+
+  def test_center_matches_the_bank_bin_for_bin(self):
+    centers = list(MOMENT_SPEED_BIN_CENTERS)
+    bounds = TorqueEstimatorExt._centers_to_bounds(centers)
+    bank = SpeedBinMomentBank(centers, bounds, STEER_BUCKET_BOUNDS)
+    for i, c in enumerate(centers):
+      assert SpeedBinMoment(STEER_BUCKET_BOUNDS, center=c).density_ceiling == pytest.approx(float(bank.density_ceiling[i]))
+
+  def test_explicit_ceiling_wins_over_center(self):
+    mom = SpeedBinMoment(STEER_BUCKET_BOUNDS, density_ceiling=9.0, center=40.0)
+    assert mom.density_ceiling == 9.0
+
+  def test_bare_default_stays_flat(self):
+    """Cache-row decoding never weights points, so the bare constructor keeps the
+    flat pre-ramp ceiling; replays must pass center= (see class docstring)."""
+    assert SpeedBinMoment(STEER_BUCKET_BOUNDS).density_ceiling == MOMENT_DENSITY_CEILING
+
+
 class TestBankMatchesReference:
   """SpeedBinMomentBank must reproduce the per-bin SpeedBinMoment loop: same
   state, same fits, same validity, over a mixed random stream that includes
@@ -724,9 +751,10 @@ class TestBankMatchesReference:
   def _run_pair(self, centers, ess_cap, n_pts=4000, seed=101):
     centers = list(centers)
     bounds = TorqueEstimatorExt._centers_to_bounds(centers)
-    ceilings = moment_density_ceiling(centers)
-    moments = [SpeedBinMoment(STEER_BUCKET_BOUNDS, ess_cap=ess_cap, density_ceiling=c)
-               for c in ceilings]
+    # center= resolves each bin's ramped ceiling — the construction any
+    # device-parity replay should copy
+    moments = [SpeedBinMoment(STEER_BUCKET_BOUNDS, ess_cap=ess_cap, center=c)
+               for c in centers]
     bank = SpeedBinMomentBank(centers, bounds, STEER_BUCKET_BOUNDS, ess_cap=ess_cap)
     rng = np.random.default_rng(seed)
     steers = rng.uniform(-0.6, 0.6, n_pts)     # some outside the tracked steer range

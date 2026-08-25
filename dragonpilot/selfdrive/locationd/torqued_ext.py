@@ -90,9 +90,14 @@ def moment_density_ceiling(centers):
   Deliberately stops well short of the ratio the top bins ask for: those tail
   buckets hold ~1% of arrivals, so buying full equal-share up there costs most of
   the bin's effective sample size (Kish ESS ~15% of raw evidence at ceiling 30 vs
-  ~23% at 15, measured on the same cache). np.interp clamps outside the anchors,
-  so a SPEED_DEP_CAR_CONFIG speed_bp grid wider or narrower than the default
-  stays well defined.
+  ~23% at 15, measured on the same cache).
+
+  The anchors are absolute speeds — the default grid's ends — deliberately NOT
+  re-derived from the grid actually in use: the distribution narrowing is a
+  property of road speed, so the same speed must get the same ceiling whatever
+  grid spans it. np.interp clamps outside the anchors, so a
+  SPEED_DEP_CAR_CONFIG speed_bp grid wider or narrower than the default stays
+  well defined.
   """
   return np.interp(np.asarray(centers, dtype=float), MOMENT_DENSITY_CEILING_V,
                    (MOMENT_DENSITY_CEILING, MOMENT_DENSITY_CEILING_HI))
@@ -104,6 +109,12 @@ class SpeedBinMoment:
   Production uses SpeedBinMomentBank (same math, all bins in stacked arrays); this
   class is kept as the readable single-bin reference and as the oracle the bank is
   tested against, and it doubles as the cache-row decoder for offline analysis.
+
+  For any replay that must match the device, pass center= (the bin's speed) so
+  the density ceiling follows the bank's speed ramp. Constructed bare, the
+  ceiling is the flat pre-ramp value — fine for decoding cache rows (the ceiling
+  only weights ingested points) but silently different from the device on
+  highway bins if points are then added.
 
   Running second-moment matrix of p = [steer, 1, lateral_accel] for one speed bin.
 
@@ -124,9 +135,11 @@ class SpeedBinMoment:
   """
 
   def __init__(self, steer_bucket_bounds, ess_cap=MOMENT_ESS_CAP,
-               density_ceiling=MOMENT_DENSITY_CEILING):
+               density_ceiling=None, center=None):
     self.bounds = list(steer_bucket_bounds)
     self.ess_cap = float(ess_cap)
+    if density_ceiling is None:
+      density_ceiling = float(moment_density_ceiling(center)) if center is not None else MOMENT_DENSITY_CEILING
     self.density_ceiling = float(density_ceiling)
     self.M = np.zeros((3, 3))
     self.S = 0.0
