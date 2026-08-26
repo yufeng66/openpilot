@@ -438,6 +438,93 @@
                   ]
                 },
                 {
+                  "key": "SpeedDependentTorqueToggle",
+                  "widget": "toggle",
+                  "title": "Speed-Dependent Self-Tune (Beta)",
+                  "description": "Learns separate torque parameters at different speeds. Improves steering at both low and high speeds for supported cars.",
+                  "enablement": [
+                    {
+                      "type": "offroad_only"
+                    },
+                    {
+                      "type": "param",
+                      "key": "LiveTorqueParamsToggle",
+                      "equals": true
+                    }
+                  ]
+                },
+                {
+                  "key": "SpeedDependentTorqueMomentToggle",
+                  "widget": "toggle",
+                  "title": "Moment-Matrix Learner (Experimental)",
+                  "description": "Replaces the speed-dependent learner's stored sample buckets with a running moment matrix. Learns each speed range faster, and lets the highest speed range be informed by neighbouring speeds instead of waiting to fill on its own.",
+                  "enablement": [
+                    {
+                      "type": "offroad_only"
+                    },
+                    {
+                      "type": "param",
+                      "key": "SpeedDependentTorqueToggle",
+                      "equals": true
+                    }
+                  ]
+                },
+                {
+                  "key": "FrictionReduction",
+                  "widget": "option",
+                  "title": "Friction Reduction",
+                  "description": "Reduces the learned friction used by the controller, which can make steering feel smoother. Each step lowers the speed-dependent learned friction by 10%. Adjustable while driving; takes effect within a few seconds.",
+                  "options": [
+                    {
+                      "value": 0,
+                      "label": "Off"
+                    },
+                    {
+                      "value": 1,
+                      "label": "-10%"
+                    },
+                    {
+                      "value": 2,
+                      "label": "-20%"
+                    },
+                    {
+                      "value": 3,
+                      "label": "-30%"
+                    },
+                    {
+                      "value": 4,
+                      "label": "-40%"
+                    },
+                    {
+                      "value": 5,
+                      "label": "-50%"
+                    },
+                    {
+                      "value": 6,
+                      "label": "-60%"
+                    },
+                    {
+                      "value": 7,
+                      "label": "-70%"
+                    },
+                    {
+                      "value": 8,
+                      "label": "-80%"
+                    },
+                    {
+                      "value": 9,
+                      "label": "-90%"
+                    }
+                  ],
+                  "enablement": [
+                    {
+                      "type": "param",
+                      "key": "SpeedDependentTorqueToggle",
+                      "equals": true
+                    }
+                  ]
+                },
+                {
                   "key": "CustomTorqueParams",
                   "widget": "toggle",
                   "title": "Enable Custom Tuning",

@@ -207,6 +207,47 @@ class TestSpuriousOffroadGatesDropped(OpenpilotTestCase):
     assert "offroad_only" not in _flatten_rule_types(item.get("enablement"))
 
 
+class TestSpeedDepTorqueItems(OpenpilotTestCase):
+  """The fork's speed-dependent torque items must stay in the schema with the
+  same parent gating that ui_state._enforce_constraints() applies on-device."""
+
+  def _param_gates(self, rules):
+    gates = set()
+
+    def _walk(rule):
+      if rule.get("type") == "param":
+        gates.add(rule.get("key"))
+      elif rule.get("type") == "not":
+        _walk(rule.get("condition", {}))
+      elif rule.get("type") in ("any", "all"):
+        for c in rule.get("conditions", []):
+          _walk(c)
+
+    for rule in rules or []:
+      _walk(rule)
+    return gates
+
+  def test_speed_dep_toggle_gates_on_self_tune(self, schema):
+    item = _find_item(schema, "SpeedDependentTorqueToggle")
+    assert item is not None, "SpeedDependentTorqueToggle not found"
+    assert "offroad_only" in _flatten_rule_types(item.get("enablement"))
+    assert "LiveTorqueParamsToggle" in self._param_gates(item.get("enablement"))
+
+  def test_moment_toggle_gates_on_speed_dep(self, schema):
+    item = _find_item(schema, "SpeedDependentTorqueMomentToggle")
+    assert item is not None, "SpeedDependentTorqueMomentToggle not found"
+    assert "offroad_only" in _flatten_rule_types(item.get("enablement"))
+    assert "SpeedDependentTorqueToggle" in self._param_gates(item.get("enablement"))
+
+  def test_friction_reduction_stays_onroad_adjustable(self, schema):
+    """Friction Reduction is meant to be felt out while driving — no offroad gate."""
+    item = _find_item(schema, "FrictionReduction")
+    assert item is not None, "FrictionReduction not found"
+    assert "offroad_only" not in _flatten_rule_types(item.get("enablement"))
+    assert "SpeedDependentTorqueToggle" in self._param_gates(item.get("enablement"))
+    assert [o["value"] for o in item.get("options", [])] == list(range(10))
+
+
 class TestNotEngagedReplacement(OpenpilotTestCase):
   @parameterized.expand([
     "AlphaLongitudinalEnabled",
