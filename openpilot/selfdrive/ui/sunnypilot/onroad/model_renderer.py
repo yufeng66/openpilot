@@ -10,12 +10,14 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.chevron_metrics import ChevronMetr
 from openpilot.selfdrive.ui.sunnypilot.onroad.rainbow_path import RainbowPath
 from openpilot.selfdrive.ui.sunnypilot.ui_state import MADSState
 from openpilot.system.ui.lib.application import gui_app
+from openpilot.selfdrive.ui.sunnypilot.onroad.radar_tracks import RadarTracks
 
 
 class ModelRendererSP:
   def __init__(self):
     self.rainbow_path = RainbowPath()
     self.chevron_metrics = ChevronMetrics()
+    self.radar_tracks = RadarTracks()
     self._width_filter = FirstOrderFilter(0.9, 0.1, 1 / gui_app.target_fps)
 
   @property
