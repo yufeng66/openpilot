@@ -58,10 +58,20 @@ sections:
       label: Time
     - value: 4
       label: All
+    - value: 5
+      label: Speed+Time
     visibility:
     - $ref: '#/macros/hide_on_mici'
     enablement:
-    - $ref: '#/macros/longitudinal'
+    - type: any
+      conditions:
+      - type: capability
+        field: has_longitudinal_control
+        equals: true
+      - type: param_compare
+        key: RadarTracks
+        op: '>'
+        value: 0
 - id: developer_ui
   title: Developer UI Info
   description: Speedometer and debug display options

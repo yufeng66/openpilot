@@ -19,6 +19,7 @@ class ChevronOptions:
   SPEED_ONLY = 2
   TTC_ONLY = 3
   ALL = 4
+  SPEED_TIME = 5
 
 
 class ChevronMetrics:
@@ -72,14 +73,14 @@ class ChevronMetrics:
       text_lines.append(f"{val:.0f} {unit}")
 
     # Speed
-    if ui_state.chevron_metrics == ChevronOptions.SPEED_ONLY or ui_state.chevron_metrics == ChevronOptions.ALL:
+    if ui_state.chevron_metrics in (ChevronOptions.SPEED_ONLY, ChevronOptions.ALL, ChevronOptions.SPEED_TIME):
       multiplier = CV.MS_TO_KPH if ui_state.is_metric else CV.MS_TO_MPH
       val = max(0.0, (v_rel + v_ego) * multiplier)
       unit = "km/h" if ui_state.is_metric else "mph"
       text_lines.append(f"{val:.0f} {unit}")
 
     # Time to collision
-    if ui_state.chevron_metrics == ChevronOptions.TTC_ONLY or ui_state.chevron_metrics == ChevronOptions.ALL:
+    if ui_state.chevron_metrics in (ChevronOptions.TTC_ONLY, ChevronOptions.ALL, ChevronOptions.SPEED_TIME):
       val = (d_rel / v_ego) if (d_rel > 0 and v_ego > 0) else 0.0
       ttc_text = f"{val:.1f} s" if (0 < val < 200) else "---"
       text_lines.append(ttc_text)

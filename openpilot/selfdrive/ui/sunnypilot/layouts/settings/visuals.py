@@ -12,9 +12,9 @@ from openpilot.system.ui.widgets.scroller_tici import Scroller
 from openpilot.system.ui.widgets import Widget
 
 CHEVRON_INFO_DESCRIPTION = {
-  "enabled": tr_noop("Display useful metrics below the chevron that tracks the lead car " +
-                     "only applicable to cars with sunnypilot longitudinal control."),
-  "disabled": tr_noop("This feature requires sunnypilot longitudinal control to be available.")
+  "enabled": tr_noop("Display useful metrics below the chevron that tracks the lead car. " +
+                     "Without sunnypilot longitudinal control, the chevron is shown when Radar Tracks and Draw Radar Tracks are on."),
+  "disabled": tr_noop("This feature requires sunnypilot longitudinal control or Radar Tracks to be available.")
 }
 
 
@@ -108,7 +108,9 @@ class VisualsLayout(Widget):
     self._chevron_info = multiple_button_item_sp(
       title=lambda: tr("Display Metrics Below Chevron"),
       description="",
-      buttons=[lambda: tr("Off"), lambda: tr("Distance"), lambda: tr("Speed"), lambda: tr("Time"), lambda: tr("All")],
+      buttons=[lambda: tr("Off"), lambda: tr("Distance"), lambda: tr("Speed"), lambda: tr("Time"), lambda: tr("All"),
+               lambda: tr("Speed+Time")],
+      button_width=250,
       param="ChevronInfo",
       inline=False
     )
@@ -135,7 +137,8 @@ class VisualsLayout(Widget):
 
     self._dev_ui_info.action_item.set_selected_button(ui_state.params.get("DevUIInfo", return_default=True))
 
-    if ui_state.has_longitudinal_control:
+    # the lead chevron also renders under stock long when radar tracks are on (see onroad/model_renderer.py)
+    if ui_state.has_longitudinal_control or ui_state.radar_tracks != 0:
       self._chevron_info.set_description(tr(CHEVRON_INFO_DESCRIPTION["enabled"]))
       self._chevron_info.action_item.set_selected_button(ui_state.params.get("ChevronInfo", return_default=True))
       self._chevron_info.action_item.set_enabled(True)

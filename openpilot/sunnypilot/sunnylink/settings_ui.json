@@ -1548,6 +1548,10 @@
                 {
                   "value": 4,
                   "label": "All"
+                },
+                {
+                  "value": 5,
+                  "label": "Speed+Time"
                 }
               ],
               "visibility": [
@@ -1562,9 +1566,20 @@
               ],
               "enablement": [
                 {
-                  "type": "capability",
-                  "field": "has_longitudinal_control",
-                  "equals": true
+                  "type": "any",
+                  "conditions": [
+                    {
+                      "type": "capability",
+                      "field": "has_longitudinal_control",
+                      "equals": true
+                    },
+                    {
+                      "type": "param_compare",
+                      "key": "RadarTracks",
+                      "op": ">",
+                      "value": 0
+                    }
+                  ]
                 }
               ]
             }
