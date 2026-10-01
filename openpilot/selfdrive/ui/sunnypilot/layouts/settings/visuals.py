@@ -109,7 +109,7 @@ class VisualsLayout(Widget):
       title=lambda: tr("Display Metrics Below Chevron"),
       description="",
       buttons=[lambda: tr("Off"), lambda: tr("Distance"), lambda: tr("Speed"), lambda: tr("Time"), lambda: tr("All"),
-               lambda: tr("Speed+Time")],
+               lambda: tr("Rel+Gap")],
       button_width=250,
       param="ChevronInfo",
       inline=False

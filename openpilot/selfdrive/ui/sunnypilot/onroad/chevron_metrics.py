@@ -19,7 +19,11 @@ class ChevronOptions:
   SPEED_ONLY = 2
   TTC_ONLY = 3
   ALL = 4
-  SPEED_TIME = 5
+  REL_SPEED_GAP = 5
+
+
+FONT_SIZE = 40
+COMPACT_FONT_SIZE = 64  # REL_SPEED_GAP: one line, sized to read at a glance
 
 
 class ChevronMetrics:
@@ -57,11 +61,15 @@ class ChevronMetrics:
     if not text_lines:
       return
 
-    self._render_text_lines(text_lines, chevron_x, chevron_y, sz, rect)
+    font_size = COMPACT_FONT_SIZE if ui_state.chevron_metrics == ChevronOptions.REL_SPEED_GAP else FONT_SIZE
+    self._render_text_lines(text_lines, chevron_x, chevron_y, sz, rect, font_size)
 
   @staticmethod
   def _build_text_lines(d_rel: float, v_rel: float, v_ego: float) -> list[str]:
     """Build text lines based on chevron info setting"""
+    if ui_state.chevron_metrics == ChevronOptions.REL_SPEED_GAP:
+      return [ChevronMetrics._rel_speed_gap_text(d_rel, v_rel, v_ego)]
+
     text_lines = []
 
     # Distance
@@ -73,25 +81,35 @@ class ChevronMetrics:
       text_lines.append(f"{val:.0f} {unit}")
 
     # Speed
-    if ui_state.chevron_metrics in (ChevronOptions.SPEED_ONLY, ChevronOptions.ALL, ChevronOptions.SPEED_TIME):
+    if ui_state.chevron_metrics == ChevronOptions.SPEED_ONLY or ui_state.chevron_metrics == ChevronOptions.ALL:
       multiplier = CV.MS_TO_KPH if ui_state.is_metric else CV.MS_TO_MPH
       val = max(0.0, (v_rel + v_ego) * multiplier)
       unit = "km/h" if ui_state.is_metric else "mph"
       text_lines.append(f"{val:.0f} {unit}")
 
     # Time to collision
-    if ui_state.chevron_metrics in (ChevronOptions.TTC_ONLY, ChevronOptions.ALL, ChevronOptions.SPEED_TIME):
+    if ui_state.chevron_metrics == ChevronOptions.TTC_ONLY or ui_state.chevron_metrics == ChevronOptions.ALL:
       val = (d_rel / v_ego) if (d_rel > 0 and v_ego > 0) else 0.0
       ttc_text = f"{val:.1f} s" if (0 < val < 200) else "---"
       text_lines.append(ttc_text)
 
     return text_lines
 
+  @staticmethod
+  def _rel_speed_gap_text(d_rel: float, v_rel: float, v_ego: float) -> str:
+    """'<lead speed minus ours>, <time gap in s>' with no units, e.g. '-5, 1.8'"""
+    multiplier = CV.MS_TO_KPH if ui_state.is_metric else CV.MS_TO_MPH
+    rel = int(round(v_rel * multiplier))
+    rel_text = f"{rel:+d}" if rel != 0 else "0"
+
+    gap = (d_rel / v_ego) if (d_rel > 0 and v_ego > 0) else 0.0
+    gap_text = f"{gap:.1f}" if (0 < gap < 200) else "---"
+    return f"{rel_text}, {gap_text}"
+
   def _render_text_lines(self, text_lines: list[str], chevron_x: float, chevron_y: float,
-                         sz: float, rect: rl.Rectangle):
+                         sz: float, rect: rl.Rectangle, font_size: int = FONT_SIZE):
     """Render text lines with proper centering and positioning"""
-    font_size = 40
-    line_height = 50
+    line_height = int(font_size * 1.25)
     margin = 20
 
     text_y = chevron_y + sz + 15
@@ -121,7 +139,8 @@ class ChevronMetrics:
       x = int(np.clip(x, margin, rect.width - text_width - margin))
 
       # Draw shadow
-      rl.draw_text_ex(self._font, line, rl.Vector2(x + 2, y + 2), font_size, 0, shadow_color)
+      shadow = max(2, font_size // 20)
+      rl.draw_text_ex(self._font, line, rl.Vector2(x + shadow, y + shadow), font_size, 0, shadow_color)
       # Draw text
       rl.draw_text_ex(self._font, line, rl.Vector2(x, y), font_size, 0, text_color)
 

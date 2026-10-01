@@ -14,18 +14,22 @@ class TestChevronMetrics(unittest.TestCase):
          mock.patch.object(chevron_metrics.ui_state, "is_metric", is_metric, create=True):
       return ChevronMetrics._build_text_lines(d_rel, v_rel, v_ego)
 
-  def test_speed_time_shows_lead_speed_and_gap_only(self):
-    assert self._lines(ChevronOptions.SPEED_TIME) == ["56 mph", "2.0 s"]
+  def test_rel_speed_gap_is_one_line_without_units(self):
+    # lead 5 mph slower than us, 1.8 s behind it
+    v_rel = -5 / 2.23694
+    assert self._lines(ChevronOptions.REL_SPEED_GAP, d_rel=1.8 * V_EGO, v_rel=v_rel) == ["-5, 1.8"]
 
-  def test_speed_time_metric(self):
-    assert self._lines(ChevronOptions.SPEED_TIME, is_metric=True) == ["90 km/h", "2.0 s"]
+  def test_rel_speed_gap_signs(self):
+    assert self._lines(ChevronOptions.REL_SPEED_GAP, v_rel=3 / 2.23694) == ["+3, 2.0"]
+    assert self._lines(ChevronOptions.REL_SPEED_GAP, v_rel=0.0) == ["0, 2.0"]
+    # rounds to zero: no "-0" or "+0"
+    assert self._lines(ChevronOptions.REL_SPEED_GAP, v_rel=-0.2) == ["0, 2.0"]
 
-  def test_lead_speed_is_absolute(self):
-    # lead 5 m/s slower than us
-    assert self._lines(ChevronOptions.SPEED_TIME, v_rel=-5.0)[0] == "45 mph"
+  def test_rel_speed_gap_metric(self):
+    assert self._lines(ChevronOptions.REL_SPEED_GAP, is_metric=True, v_rel=-10 / 3.6) == ["-10, 2.0"]
 
-  def test_gap_unavailable_at_standstill(self):
-    assert self._lines(ChevronOptions.SPEED_TIME, d_rel=8.0, v_rel=0.0, v_ego=0.0) == ["0 mph", "---"]
+  def test_rel_speed_gap_at_standstill(self):
+    assert self._lines(ChevronOptions.REL_SPEED_GAP, d_rel=8.0, v_rel=0.0, v_ego=0.0) == ["0, ---"]
 
   def test_existing_options_unchanged(self):
     assert self._lines(ChevronOptions.OFF) == []

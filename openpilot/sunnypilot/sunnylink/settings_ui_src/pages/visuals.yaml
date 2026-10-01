@@ -59,7 +59,7 @@ sections:
     - value: 4
       label: All
     - value: 5
-      label: Speed+Time
+      label: Rel+Gap
     visibility:
     - $ref: '#/macros/hide_on_mici'
     enablement:

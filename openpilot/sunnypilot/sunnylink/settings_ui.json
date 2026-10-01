@@ -1551,7 +1551,7 @@
                 },
                 {
                   "value": 5,
-                  "label": "Speed+Time"
+                  "label": "Rel+Gap"
                 }
               ],
               "visibility": [
