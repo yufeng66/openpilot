@@ -12,6 +12,7 @@ import pyray as rl
 
 from openpilot.common.basedir import BASEDIR
 from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_dep_helpers import FRICTION_REDUCTION_MAX_STEPS, friction_reduction_amount
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.sunnypilot.lib.utils import NoElideButtonAction
@@ -82,12 +83,12 @@ class TorqueSettingsLayout(Widget):
       title=lambda: tr("Friction Reduction"),
       param="FrictionReduction",
       description=lambda: tr("Reduces the learned friction used by the controller, which can make steering feel " +
-                             "smoother. Each step lowers the speed-dependent learned friction by 10%. " +
-                             "Adjustable while driving; takes effect within a few seconds."),
+                             "smoother. Each step subtracts 0.005 from the speed-dependent learned friction, " +
+                             "never going below zero. Adjustable while driving; takes effect within a few seconds."),
       min_value=0,
-      max_value=9,
+      max_value=FRICTION_REDUCTION_MAX_STEPS,
       value_change_step=1,
-      label_callback=(lambda x: tr("Off") if x == 0 else f"-{x * 10}%"),
+      label_callback=(lambda x: tr("Off") if x == 0 else f"-{friction_reduction_amount(x):.3f}"),
     )
     self._custom_tune_toggle = toggle_item_sp(
       param="CustomTorqueParams",

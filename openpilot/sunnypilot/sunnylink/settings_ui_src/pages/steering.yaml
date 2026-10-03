@@ -179,29 +179,52 @@ sections:
     - key: FrictionReduction
       widget: option
       title: Friction Reduction
-      description: Reduces the learned friction used by the controller, which can make steering feel smoother. Each step lowers
-        the speed-dependent learned friction by 10%. Adjustable while driving; takes effect within a few seconds.
+      description: Reduces the learned friction used by the controller, which can make steering feel smoother. Each step subtracts
+        0.005 from the speed-dependent learned friction, never going below zero. Adjustable while driving; takes effect within
+        a few seconds.
       options:
       - value: 0
         label: 'Off'
       - value: 1
-        label: '-10%'
+        label: '-0.005'
       - value: 2
-        label: '-20%'
+        label: '-0.010'
       - value: 3
-        label: '-30%'
+        label: '-0.015'
       - value: 4
-        label: '-40%'
+        label: '-0.020'
       - value: 5
-        label: '-50%'
+        label: '-0.025'
       - value: 6
-        label: '-60%'
+        label: '-0.030'
       - value: 7
-        label: '-70%'
+        label: '-0.035'
       - value: 8
-        label: '-80%'
+        label: '-0.040'
       - value: 9
-        label: '-90%'
+        label: '-0.045'
+      - value: 10
+        label: '-0.050'
+      - value: 11
+        label: '-0.055'
+      - value: 12
+        label: '-0.060'
+      - value: 13
+        label: '-0.065'
+      - value: 14
+        label: '-0.070'
+      - value: 15
+        label: '-0.075'
+      - value: 16
+        label: '-0.080'
+      - value: 17
+        label: '-0.085'
+      - value: 18
+        label: '-0.090'
+      - value: 19
+        label: '-0.095'
+      - value: 20
+        label: '-0.100'
       enablement:
       - type: param
         key: SpeedDependentTorqueToggle

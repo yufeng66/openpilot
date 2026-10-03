@@ -39,7 +39,8 @@ class LatControlTorqueExtOverride:
     # torque_params) because extension.update() runs after those calls.
     if self._speed_dep_active and self._speed_dep_speed_bp:
       torque_params.latAccelFactor = float(np.interp(self._last_vego, self._speed_dep_speed_bp, self._speed_dep_lat_accel_factor_bp))
-      torque_params.friction = float(np.interp(self._last_vego, self._speed_dep_speed_bp, self._speed_dep_friction_bp))
+      # floored at zero: a negative friction would flip the friction feedforward
+      torque_params.friction = max(float(np.interp(self._last_vego, self._speed_dep_speed_bp, self._speed_dep_friction_bp)), 0.0)
       # Re-derive the PID limits here and report no change, instead of returning
       # True: the caller reacts to True with its own update_limits(), which runs
       # after controlsd has already pinned the shared PID to torque-space bounds

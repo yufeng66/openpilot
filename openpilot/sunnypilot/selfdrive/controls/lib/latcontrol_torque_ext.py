@@ -45,8 +45,8 @@ class LatControlTorqueExt(NeuralNetworkLateralControl, LatControlTorqueExtOverri
 
   def update_speed_dep_torque(self, tp, friction_reduction: int = 0):
     """Apply speed-dependent learned values from torqued.
-    Learned bins are used directly, with friction scaled by the Friction Reduction
-    setting. Unlearned bins fall back to TOML seed values if available for this car,
+    Learned bins are used directly, with the Friction Reduction setting subtracted
+    from friction (floored at zero). Unlearned bins fall back to TOML seed values if available for this car,
     otherwise the nearest learned bin, otherwise global filtered (see
     build_speed_dep_bp)."""
     speed_bp = list(tp.speedBinCenters)

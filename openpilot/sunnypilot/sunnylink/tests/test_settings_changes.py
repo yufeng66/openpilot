@@ -17,6 +17,7 @@ from typing import Any
 
 from openpilot.common.parameterized import parameterized
 
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_dep_helpers import FRICTION_REDUCTION_MAX_STEPS
 from openpilot.sunnypilot.sunnylink.tools.generate_settings_schema import (
   DEFINITION_PATH,
   TORQUE_VERSIONS_PATH,
@@ -245,7 +246,8 @@ class TestSpeedDepTorqueItems(OpenpilotTestCase):
     assert item is not None, "FrictionReduction not found"
     assert "offroad_only" not in _flatten_rule_types(item.get("enablement"))
     assert "SpeedDependentTorqueToggle" in self._param_gates(item.get("enablement"))
-    assert [o["value"] for o in item.get("options", [])] == list(range(10))
+    assert [o["value"] for o in item.get("options", [])] == list(range(FRICTION_REDUCTION_MAX_STEPS + 1))
+    assert [o["label"] for o in item["options"]][1::5] == ["-0.005", "-0.030", "-0.055", "-0.080"]
 
 
 class TestNotEngagedReplacement(OpenpilotTestCase):

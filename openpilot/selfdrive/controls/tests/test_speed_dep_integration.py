@@ -20,7 +20,8 @@ from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext import LatControlTorqueExt
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext_override import LatControlTorqueExtOverride
-from openpilot.sunnypilot.selfdrive.controls.lib.speed_dep_helpers import friction_scale
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_dep_helpers import (FRICTION_REDUCTION_MAX_STEPS, build_speed_dep_bp,
+                                                                          friction_reduction_amount, reduce_friction)
 from openpilot.sunnypilot.selfdrive.test.approx import approx
 
 SPEED_DEP_CARS = get_speed_dep_config()
@@ -573,18 +574,28 @@ class TestNearestLearnedBinFallback(unittest.TestCase):
 
 
 class TestFrictionReduction(unittest.TestCase):
-  """The Friction Reduction setting scales learned friction only — never TOML
-  seeds, never the global fallback, never latAccelFactor."""
+  """The Friction Reduction setting subtracts a fixed amount from learned friction only
+  (never TOML seeds, the global fallback, or latAccelFactor), and the controller never
+  sees a negative friction."""
 
-  def test_friction_scale_steps_and_clamping(self):
-    assert friction_scale(0) == approx(1.0)
-    assert friction_scale(5) == approx(0.5)
-    assert friction_scale(9) == approx(0.1)
-    assert friction_scale(-3) == approx(1.0)
-    assert friction_scale(42) == approx(0.1)
+  def test_reduction_amount_steps_and_clamping(self):
+    assert friction_reduction_amount(0) == approx(0.0)
+    assert friction_reduction_amount(1) == approx(0.005)
+    assert friction_reduction_amount(6) == approx(0.030)
+    assert friction_reduction_amount(7) == approx(0.035)
+    assert friction_reduction_amount(FRICTION_REDUCTION_MAX_STEPS) == approx(0.100)
+    assert friction_reduction_amount(-3) == approx(0.0)
+    assert friction_reduction_amount(42) == approx(0.100)
+
+  def test_reduce_friction_is_absolute_and_floored_at_zero(self):
+    # same cut at every friction level, so the relative cut grows as friction falls with speed
+    assert reduce_friction(0.155, 6) == approx(0.125)
+    assert reduce_friction(0.083, 6) == approx(0.053)
+    assert reduce_friction(0.020, 6) == 0.0
+    assert reduce_friction(-0.010, 0) == 0.0
 
   @patch(PATCH_GET_SPEED_DEP_CONFIG)
-  def test_reduction_scales_learned_friction_only(self, mock_get_config):
+  def test_reduction_subtracts_from_learned_friction_only(self, mock_get_config):
     mock_get_config.return_value = {}
     lafs = [2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7]
     frictions = [0.11, 0.12, 0.13, 0.14, 0.15, 0.16, 0.17]
@@ -592,10 +603,24 @@ class TestFrictionReduction(unittest.TestCase):
     mock_tp = TestUpdateSpeedDepTorqueFallback._make_mock_tp(
       SAMPLE_SPEED_BP, lafs, frictions, [True] * 7)
 
-    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, friction_reduction=5)
+    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, friction_reduction=6)
 
-    assert mock_self._speed_dep_friction_bp == approx([f * 0.5 for f in frictions])
+    assert mock_self._speed_dep_friction_bp == approx([f - 0.03 for f in frictions])
     assert mock_self._speed_dep_lat_accel_factor_bp == approx(lafs)
+
+  @patch(PATCH_GET_SPEED_DEP_CONFIG)
+  def test_large_reduction_never_goes_negative(self, mock_get_config):
+    mock_get_config.return_value = {}
+    frictions = [0.15, 0.12, 0.10, 0.08, 0.06, 0.04, 0.02]
+    mock_self = TestUpdateSpeedDepTorqueFallback._make_mock_self(fingerprint='UNKNOWN_CAR')
+    mock_tp = TestUpdateSpeedDepTorqueFallback._make_mock_tp(
+      SAMPLE_SPEED_BP, [2.5] * 7, frictions, [True] * 7)
+
+    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, friction_reduction=FRICTION_REDUCTION_MAX_STEPS)
+
+    assert mock_self._speed_dep_friction_bp == approx([0.05, 0.02, 0.0, 0.0, 0.0, 0.0, 0.0])
+    assert min(mock_self._speed_dep_friction_bp) >= 0.0
+    assert mock_self.lac_torque.torque_params.friction >= 0.0
 
   @patch(PATCH_GET_SPEED_DEP_CONFIG)
   def test_reduction_not_applied_to_global_fallback(self, mock_get_config):
@@ -604,7 +629,7 @@ class TestFrictionReduction(unittest.TestCase):
     mock_tp = TestUpdateSpeedDepTorqueFallback._make_mock_tp(
       SAMPLE_SPEED_BP, [9.9] * 7, [9.9] * 7, [False] * 7, global_laf=2.0, global_fric=0.15)
 
-    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, friction_reduction=9)
+    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, friction_reduction=FRICTION_REDUCTION_MAX_STEPS)
 
     assert mock_self._speed_dep_friction_bp == approx([0.15] * 7)
 
@@ -621,13 +646,32 @@ class TestFrictionReduction(unittest.TestCase):
     mock_tp = TestUpdateSpeedDepTorqueFallback._make_mock_tp(
       SAMPLE_SPEED_BP, [3.0] * 7, learned_frictions, valid)
 
-    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, friction_reduction=5)
+    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, friction_reduction=10)
 
     for i in range(7):
       if valid[i]:
-        assert mock_self._speed_dep_friction_bp[i] == approx(0.1), f"learned bin {i} must be scaled"
+        assert mock_self._speed_dep_friction_bp[i] == approx(0.15), f"learned bin {i} must be reduced"
       else:
-        assert mock_self._speed_dep_friction_bp[i] == approx(seed_frictions[i]), f"seed bin {i} must not be scaled"
+        assert mock_self._speed_dep_friction_bp[i] == approx(seed_frictions[i]), f"seed bin {i} must not be reduced"
+
+  def test_negative_fallbacks_floored_at_zero(self):
+    _, _, fric_bp = build_speed_dep_bp(SAMPLE_SPEED_BP, [2.0] * 7, [0.1] * 7, [False] * 7,
+                                       None, None, 2.0, -0.05)
+    assert fric_bp == [0.0] * 7
+    _, _, fric_bp = build_speed_dep_bp(SAMPLE_SPEED_BP, [2.0] * 7, [0.1] * 7, [False] * 7,
+                                       [2.0] * 7, [-0.02] * 7, 2.0, 0.1)
+    assert fric_bp == [0.0] * 7
+
+  def test_controller_never_applies_negative_friction(self):
+    """Per-frame guard: whatever lands in the speed-dep table, the torque params the
+    controller reads each frame carry a non-negative friction."""
+    ovr = make_override()
+    activate_speed_dep(ovr, friction_bp=[0.05, -0.02, -0.04, 0.0, 0.03, 0.02, 0.01])
+    for v_ego in [0.0, 6.5, 8.0, 10.0, 12.5, 15.0, 21.0, 40.0]:
+      tp = TorqueParams(friction=0.5)
+      ovr._last_vego = v_ego
+      ovr.update_override_torque_params(tp)
+      assert tp.friction >= 0.0, f"negative friction at {v_ego} m/s"
 
 
 class TestExtrapolationAtBoundaries(unittest.TestCase):
