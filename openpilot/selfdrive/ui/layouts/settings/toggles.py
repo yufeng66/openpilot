@@ -117,7 +117,6 @@ class TogglesLayout(Widget):
         callback=self._set_radar_tracks,
         selected_index=self._params.get("RadarTracks", return_default=True),
       )
-      self._toggles["RadarTracks"] = self._radar_tracks_setting
       self._toggle_defs["DrawRadarTracks"] = (
         lambda: tr("Draw Radar Tracks"),
         tr_noop("Show radar tracks on the driving screen. Disabling this does not disable radar processing."),
@@ -149,6 +148,10 @@ class TogglesLayout(Widget):
       # track for engaged state updates
       if locked:
         self._locked_toggles.add(param)
+
+      # insert radar tracks mode right above its draw toggle
+      if param == "DrawRadarTracks":
+        self._toggles["RadarTracks"] = self._radar_tracks_setting
 
       self._toggles[param] = toggle
 
