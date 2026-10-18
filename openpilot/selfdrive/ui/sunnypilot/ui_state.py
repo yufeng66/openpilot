@@ -227,10 +227,9 @@ class UIStateSP:
       self.params.remove("LateralJerkTorqueController")
       self.params.remove("AlphaLongitudinalEnabled")
 
-    # No longitudinal control: no experimental mode or DEC
+    # No longitudinal control: no experimental mode
     if not has_long:
       self.params.remove("ExperimentalMode")
-      self.params.remove("DynamicExperimentalControl")
 
     # Speed-dep torque settings live behind the Enforce-gated torque panel and its
     # Self-Tune toggle; clear them when a parent turns off so the feature cannot
