@@ -131,7 +131,10 @@ class CarInterface(CarInterfaceBase):
       if eps_modified:
         ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.3], [0.09]]
       else:
-        ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.6], [0.18]]
+        # dp: torque tuning on the stock EPS (comma's params.toml fit, upstream PID was kp 0.6 / ki 0.18)
+        # so the torque learner and the speed-dependent learner (dp_lat_torqued_sd) run on this car.
+        # The modded-EPS tune stays PID: the offline torque fit assumes the stock EPS torque ceiling.
+        CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
 
     elif candidate == CAR.ACURA_ILX:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 3840], [0, 3840]]  # TODO: determine if there is a dead zone at the top end
