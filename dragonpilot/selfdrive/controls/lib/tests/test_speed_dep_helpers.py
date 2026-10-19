@@ -4,8 +4,10 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+import dragonpilot.selfdrive.controls.lib.speed_dep_helpers as speed_dep_helpers
 from dragonpilot.selfdrive.controls.lib.speed_dep_helpers import (
-  build_speed_dep_bp, friction_scale, interp_live_torque_params,
+  FRICTION_REDUCTION_MAX_STEPS, build_speed_dep_bp, friction_reduction_amount,
+  interp_live_torque_params, reduce_friction,
 )
 
 SPEED_BP = [10.0, 20.0, 30.0]
@@ -25,13 +27,26 @@ def make_tp(centers=None, factors=None, frictions=None, valid=None,
   )
 
 
-class TestFrictionScale:
-  def test_steps_and_clamping(self):
-    assert friction_scale(0) == pytest.approx(1.0)
-    assert friction_scale(3) == pytest.approx(0.7)
-    assert friction_scale(9) == pytest.approx(0.1)
-    assert friction_scale(15) == pytest.approx(0.1)   # clamped high
-    assert friction_scale(-2) == pytest.approx(1.0)   # clamped low
+class TestFrictionReduction:
+  """Step N subtracts N*0.005 from learned friction (an absolute cut, not a
+  percentage: learned friction already falls with speed, so one setting removes
+  a larger share on the highway than in town), and never goes below zero."""
+
+  def test_amount_steps_and_clamping(self):
+    assert friction_reduction_amount(0) == pytest.approx(0.0)
+    assert friction_reduction_amount(1) == pytest.approx(0.005)
+    assert friction_reduction_amount(6) == pytest.approx(0.030)
+    assert friction_reduction_amount(7) == pytest.approx(0.035)
+    assert friction_reduction_amount(FRICTION_REDUCTION_MAX_STEPS) == pytest.approx(0.100)
+    assert friction_reduction_amount(42) == pytest.approx(0.100)   # clamped high
+    assert friction_reduction_amount(-3) == pytest.approx(0.0)     # clamped low
+
+  def test_reduce_friction_is_absolute_and_floored_at_zero(self):
+    # same cut at every friction level, so the relative cut grows as friction falls with speed
+    assert reduce_friction(0.155, 6) == pytest.approx(0.125)
+    assert reduce_friction(0.083, 6) == pytest.approx(0.053)
+    assert reduce_friction(0.020, 6) == 0.0
+    assert reduce_friction(-0.010, 0) == 0.0
 
 
 class TestBuildSpeedDepBp:
@@ -72,19 +87,35 @@ class TestBuildSpeedDepBp:
     assert speeds == [10.0]                  # fell through to learned-only
     assert lafs == [2.0]
 
-  def test_reduction_scales_learned_friction_only(self):
-    _, _, frics = build_speed_dep_bp(
+  def test_reduction_subtracts_from_learned_friction_only(self):
+    _, lafs, frics = build_speed_dep_bp(
       SPEED_BP, [2.0, 2.1, 2.2], [0.10, 0.20, 0.30], [True, False, True],
-      [3.0, 3.1, 3.2], [0.20, 0.21, 0.22], 1.25, 0.125, friction_reduction=5)
-    assert frics[0] == pytest.approx(0.05)   # learned, scaled by 0.5
-    assert frics[1] == pytest.approx(0.21)   # seed, not scaled
-    assert frics[2] == pytest.approx(0.15)   # learned, scaled
+      [3.0, 3.1, 3.2], [0.20, 0.21, 0.22], 1.25, 0.125, friction_reduction=6)
+    assert frics[0] == pytest.approx(0.07)   # learned, -0.03
+    assert frics[1] == pytest.approx(0.21)   # seed, not reduced
+    assert frics[2] == pytest.approx(0.27)   # learned, -0.03
+    assert lafs == [2.0, 3.1, 2.2]           # latAccelFactor never touched
 
   def test_reduction_not_applied_to_global_fallback(self):
     _, _, frics = build_speed_dep_bp(
       SPEED_BP, [0.0] * 3, [0.0] * 3, [False] * 3,
-      None, None, 1.25, 0.125, friction_reduction=5)
+      None, None, 1.25, 0.125, friction_reduction=FRICTION_REDUCTION_MAX_STEPS)
     assert frics == [0.125] * 3
+
+  def test_large_reduction_never_goes_negative(self):
+    _, _, frics = build_speed_dep_bp(
+      SPEED_BP, [2.5] * 3, [0.15, 0.02, 0.10], [True] * 3,
+      None, None, 1.25, 0.125, friction_reduction=FRICTION_REDUCTION_MAX_STEPS)
+    assert frics == pytest.approx([0.05, 0.0, 0.0])
+    assert min(frics) >= 0.0
+
+  def test_negative_fallbacks_floored_at_zero(self):
+    _, _, frics = build_speed_dep_bp(
+      SPEED_BP, [2.0] * 3, [0.1] * 3, [False] * 3, None, None, 2.0, -0.05)
+    assert frics == [0.0] * 3
+    _, _, frics = build_speed_dep_bp(
+      SPEED_BP, [2.0] * 3, [0.1] * 3, [False] * 3, [2.0] * 3, [-0.02] * 3, 2.0, 0.1)
+    assert frics == [0.0] * 3
 
 
 class TestInterpLiveTorqueParams:
@@ -132,12 +163,12 @@ class TestInterpFrictionReduction:
   """The Friction Reduction setting (dp_lat_torqued_sd_friction) reaches the
   controller through interp_live_torque_params' last argument."""
 
-  def test_scales_learned_friction_and_leaves_laf_alone(self):
+  def test_subtracts_from_learned_friction_and_leaves_laf_alone(self):
     tp = make_tp(SPEED_BP, [2.0, 2.4, 2.8], [0.10, 0.14, 0.18], [True, True, True])
     base_laf, _, base_fric = interp_live_torque_params(tp, 15.0)
-    laf, _, fric = interp_live_torque_params(tp, 15.0, None, 3)
+    laf, _, fric = interp_live_torque_params(tp, 15.0, None, 6)
     assert laf == pytest.approx(base_laf)          # only friction is touched
-    assert fric == pytest.approx(base_fric * 0.7)
+    assert fric == pytest.approx(base_fric - 0.03)
 
   def test_zero_is_a_no_op(self):
     tp = make_tp(SPEED_BP, [2.0, 2.4, 2.8], [0.10, 0.14, 0.18], [True, True, True])
@@ -147,15 +178,26 @@ class TestInterpFrictionReduction:
     """No bins in the message means the learner is off; the setting must not
     quietly reduce the global learner's friction."""
     tp = make_tp()
-    assert interp_live_torque_params(tp, 20.0, None, 9) == interp_live_torque_params(tp, 20.0)
+    assert interp_live_torque_params(tp, 20.0, None, FRICTION_REDUCTION_MAX_STEPS) == interp_live_torque_params(tp, 20.0)
 
   def test_seeded_bins_are_not_reduced(self):
     tp = make_tp(SPEED_BP, [2.0, 9.9, 2.8], [0.10, 9.9, 0.18], [True, False, True])
     cfg = {'laf_bp': [3.0, 3.1, 3.2], 'friction_bp': [0.2, 0.21, 0.22]}
-    _, _, fric = interp_live_torque_params(tp, 20.0, cfg, 5)
-    assert fric == pytest.approx(0.21)   # seed value, untouched by the scale
+    _, _, fric = interp_live_torque_params(tp, 20.0, cfg, 6)
+    assert fric == pytest.approx(0.21)   # seed value, untouched by the cut
 
-  def test_max_step_keeps_friction_positive(self):
+  def test_max_step_floors_friction_at_zero(self):
     tp = make_tp(SPEED_BP, [2.0, 2.4, 2.8], [0.10, 0.14, 0.18], [True, True, True])
-    _, _, fric = interp_live_torque_params(tp, 15.0, None, 9)
-    assert 0.0 < fric < 0.12 * 0.11
+    # -0.100 leaves [0.0, 0.04, 0.08]: interpolated, never negative
+    assert interp_live_torque_params(tp, 10.0, None, FRICTION_REDUCTION_MAX_STEPS)[2] == 0.0
+    assert interp_live_torque_params(tp, 15.0, None, FRICTION_REDUCTION_MAX_STEPS)[2] == pytest.approx(0.02)
+    assert interp_live_torque_params(tp, 30.0, None, FRICTION_REDUCTION_MAX_STEPS)[2] == pytest.approx(0.08)
+
+  def test_per_frame_value_never_negative(self, monkeypatch):
+    """Second guard, independent of the table builder: whatever lands in the
+    friction table, the per-frame value the controller reads is >= 0."""
+    monkeypatch.setattr(speed_dep_helpers, 'build_speed_dep_bp',
+                        lambda *a, **k: (SPEED_BP, [2.0] * 3, [0.05, -0.02, -0.04]))
+    tp = make_tp(SPEED_BP, [2.0] * 3, [0.1] * 3, [True] * 3)
+    for v_ego in [0.0, 10.0, 15.0, 20.0, 25.0, 30.0, 45.0]:
+      assert interp_live_torque_params(tp, v_ego)[2] >= 0.0, f"negative friction at {v_ego} m/s"

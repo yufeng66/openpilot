@@ -21,16 +21,17 @@ ITEMS = [
     # implicit string concatenation, not "+": xgettext only extracts adjacent
     # literals, so a "+"-joined msgid never reaches the .po files
     "description": lambda: tr("Lower the learned friction the controller applies, which can make steering feel smoother. "  # noqa: ISC002
-                              "Each step is -10%, and only speed bins the learner has validated are scaled. "  # noqa: ISC002
+                              "Each step subtracts 0.005 from the learned friction, never going below zero, "  # noqa: ISC002
+                              "and only speed bins the learner has validated are reduced. "  # noqa: ISC002
                               "Read once at engage, so change it with the car off."),
     "brands": ["toyota", "hyundai", "honda", "volkswagen", "rivian"],
     "depends_on": "dp_lat_torqued_sd == 1",
     "needs_restart": True,
     "default": "0",
     "min_val": 0,
-    "max_val": 9,
+    "max_val": 20,  # FRICTION_REDUCTION_MAX_STEPS (-0.100); pinned by test_lat_torque_settings
     "step": 1,
-    "suffix": lambda: tr(" x -10%"),
+    "suffix": lambda: tr(" x -0.005"),
     "flags": "PERSISTENT",
     "param_type": "INT",
   },

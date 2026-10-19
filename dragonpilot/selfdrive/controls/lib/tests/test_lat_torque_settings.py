@@ -28,14 +28,17 @@ class TestFrictionReductionSetting:
     assert it["param_type"] == "INT"
     assert it["default"] == "0"
 
-  def test_range_matches_the_friction_scale_the_controller_applies(self, items):
-    """friction_scale() clamps to [0, 9]; a wider spinner would offer steps that
-    silently do nothing."""
-    from dragonpilot.selfdrive.controls.lib.speed_dep_helpers import friction_scale
+  def test_range_matches_the_reduction_the_controller_applies(self, items):
+    """friction_reduction_amount() clamps to [0, FRICTION_REDUCTION_MAX_STEPS]; a wider
+    spinner would offer steps that silently do nothing, a narrower one would hide
+    cuts the controller can apply."""
+    from dragonpilot.selfdrive.controls.lib.speed_dep_helpers import (
+      FRICTION_REDUCTION_MAX_STEPS, friction_reduction_amount,
+    )
     it = items[FRICTION_KEY]
-    assert (it["min_val"], it["max_val"], it["step"]) == (0, 9, 1)
-    assert friction_scale(it["min_val"]) == pytest.approx(1.0)
-    assert friction_scale(it["max_val"]) == pytest.approx(0.1)
+    assert (it["min_val"], it["max_val"], it["step"]) == (0, FRICTION_REDUCTION_MAX_STEPS, 1)
+    assert friction_reduction_amount(it["min_val"]) == pytest.approx(0.0)
+    assert friction_reduction_amount(it["max_val"]) == pytest.approx(0.1)
 
   def test_depends_on_the_learner_toggle(self, items):
     it = items[FRICTION_KEY]
