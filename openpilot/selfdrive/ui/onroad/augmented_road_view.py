@@ -34,8 +34,8 @@ BORDER_COLORS = {
   **BORDER_COLORS_SP,
 }
 
-WIDE_CAM_MAX_SPEED = 10.0  # m/s (22 mph)
-ROAD_CAM_MIN_SPEED = 15.0  # m/s (34 mph)
+WIDE_CAM_MAX_SPEED = 5.0  # m/s (11 mph)
+ROAD_CAM_MIN_SPEED = 10.0  # m/s (22 mph)
 INF_POINT = np.array([1000.0, 0.0, 0.0])
 
 
@@ -121,11 +121,11 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
   def _handle_mouse_press(self, mouse_pos):
     if self._radar_tracks_status is not None and self._radar_tracks_status.handle_mouse(mouse_pos):
       return
-    if not self._hud_renderer.user_interacting() and self._click_callback is not None:
+    if self._click_callback is not None:
       self._click_callback()
 
   def _handle_mouse_release(self, _):
-    # We only call click callback on press if not interacting with HUD
+    # We only call click callback on press
     pass
 
   def _draw_border(self, rect: rl.Rectangle):
@@ -137,7 +137,7 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
     rl.draw_rectangle_rounded_lines_ex(border_rect, border_roundness, 10, UI_BORDER_SIZE, border_color)
 
   def _switch_stream_if_needed(self, sm):
-    if sm['selfdriveState'].experimentalMode and WIDE_CAM in self.available_streams:
+    if sm['carParams'].openpilotLongitudinalControl and WIDE_CAM in self.available_streams:
       v_ego = sm['carState'].vEgo
       if v_ego < WIDE_CAM_MAX_SPEED:
         target = WIDE_CAM

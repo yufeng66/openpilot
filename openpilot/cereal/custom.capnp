@@ -138,6 +138,9 @@ struct ModelManagerSP @0xaedffd8f31e7b55d {
     status @0 :DownloadStatus;
     progress @1 :Float32;
     eta @2 :UInt32;
+    speed @3 :Float32;
+    canceling @4 :Bool;
+    resuming @5 :Bool;
   }
 
   struct Chunk {
@@ -345,7 +348,7 @@ struct OnroadEventSP @0xda96579883444c35 {
     silentParkBrake @11;
     controlsMismatchLateral @12;
     hyundaiRadarTracksConfirmed @13;
-    experimentalModeSwitched @14;
+    experimentalModeSwitchedDEPRECATED @14;
     wrongCarModeAlertOnly @15;
     pedalPressedAlertOnly @16;
     laneTurnLeft @17;
