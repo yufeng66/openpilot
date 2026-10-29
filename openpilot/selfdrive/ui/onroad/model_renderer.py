@@ -129,6 +129,7 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     # Draw elements
     self._draw_lane_lines()
     self._draw_path()
+    self.blendful.draw(self._rect)
 
     if ui_state.draw_radar_tracks and sm.valid['radarTracks'] and sm.recv_frame['radarTracks'] >= ui_state.started_frame:
       if (sm.updated['radarTracks'] or sm.updated['extrinsicsCalibration'] or transform_updated or
@@ -197,6 +198,7 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     # Update road edges using raw points
     for road_edge in self._road_edges:
       road_edge.projected_points = self._map_line_to_polygon(road_edge.raw_points, 0.025, 0.0, max_idx, max_distance)
+    self.blendful.update(self, max_idx, max_distance)
 
     # Update path using raw points
     if lead and lead.present:

@@ -143,6 +143,7 @@ class ModelRenderer(Widget, ModelRendererSP):
     if ui_state.status != UIStatus.DISENGAGED:
       self._draw_lane_lines()
       self._draw_path()
+      self.blendful.draw(self._rect)
 
     if ui_state.draw_radar_tracks and sm.valid['radarTracks'] and sm.recv_frame['radarTracks'] >= ui_state.started_frame:
       if (sm.updated['radarTracks'] or sm.updated['extrinsicsCalibration'] or transform_updated or
@@ -237,6 +238,7 @@ class ModelRenderer(Widget, ModelRendererSP):
     # Update road edges using raw points
     for road_edge in self._road_edges:
       road_edge.projected_points = self._map_line_to_polygon(road_edge.raw_points, line_width_factor, 0.0, max_idx)
+    self.blendful.update(self, max_idx)
 
     # Update path using raw points
     if lead and lead.present:
