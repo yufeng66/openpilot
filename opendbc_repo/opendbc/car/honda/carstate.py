@@ -113,6 +113,13 @@ class CarState(CarStateBase):
       ret.steerFaultPermanent = False
       ret.steerFaultTemporary = False
 
+    if self.CP.flags & HondaFlags.EPS_ANGLE_LOOP_FW:
+      # the angle-loop EPS's angle is a valid absolute angle only while all three sensor status bits read 1; outside
+      # that the EPS would servo from a false angle, so do not steer
+      sensors = cp.vl["STEERING_SENSORS"]
+      if not all(sensors[f"STEER_SENSOR_STATUS_{i}"] == 1 for i in (1, 2, 3)):
+        ret.steerFaultTemporary = True
+
     # All Honda EPS cut off slightly above standstill, some much higher
     # Don't alert in the near-standstill range, but alert for per-vehicle configured minimums above that
     if CarControllerParams.STEER_GLOBAL_MIN_SPEED < ret.vEgo < (self.CP.minSteerSpeed + 0.5):

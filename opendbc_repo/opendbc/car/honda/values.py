@@ -1,10 +1,11 @@
 from dataclasses import dataclass, field
 from enum import Enum, IntFlag
 
-from opendbc.car import Bus, CarSpecs, DbcDict, PlatformConfig, Platforms, structs, uds
+from opendbc.car import ACCELERATION_DUE_TO_GRAVITY, Bus, CarSpecs, DbcDict, PlatformConfig, Platforms, structs, uds
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.docs_definitions import CarFootnote, CarHarness, CarDocs, CarParts, Column
 from opendbc.car.fw_query_definitions import FwQueryConfig, Request, StdQueries, p16
+from opendbc.car.lateral import AngleSteeringLimits, ISO_LATERAL_ACCEL
 
 Ecu = structs.CarParams.Ecu
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
@@ -39,6 +40,28 @@ class CarControllerParams:
   STEER_DELTA_UP = 3  # min/max in 0.33s for all Honda
   STEER_DELTA_DOWN = 3
   STEER_GLOBAL_MIN_SPEED = 3 * CV.MPH_TO_MS
+
+  # Accord on the angle-loop EPS firmware (HondaFlags.EPS_ANGLE_LOOP_FW): 0xE4 STEER_TORQUE carries an angle setpoint,
+  # raw = round(-10 * deg) in carState.steeringAngleDeg's frame, and the EPS closes its own angle loop on it. The EPS
+  # applies no rate limit or plausibility check to the setpoint, and the panda bounds nothing on 0xE4 beyond
+  # "bytes 0-1 zero while not allowed", so every limit below is ours.
+  ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
+    400,  # deg; the EPS clamps its setpoint at raw +-4096
+    # unused: the angle-loop path uses the vehicle model limits below (apply_steer_angle_limits_vm)
+    ([], []),
+    ([], []),
+    # extra tolerance for an average banked road (6% superelevation), as on the other vehicle model angle cars
+    MAX_LATERAL_ACCEL=ISO_LATERAL_ACCEL + (ACCELERATION_DUE_TO_GRAVITY * 0.06),  # ~3.6 m/s^2
+    MAX_LATERAL_JERK=3.0 + (ACCELERATION_DUE_TO_GRAVITY * 0.06),  # ~3.6 m/s^3
+    MAX_ANGLE_RATE=2.5,  # deg/frame at 100 Hz = 250 deg/s
+  )
+  # Error clip |setpoint - measured angle| <= ANGLE_ERROR_MAX(v): bounds the P torque the setpoint can demand. Each
+  # knot is the error at which the firmware's P term alone fills the room left under its PID sum clamp while the
+  # integral sits at its cap, at the firmware's gain-table speed knots.
+  ANGLE_ERROR_MAX_BP = [3.1, 8.0, 10.0, 11.75, 17.5, 26.9]  # m/s
+  ANGLE_ERROR_MAX_V = [35.4, 23.4, 45.0, 61.0, 25.0, 12.2]  # deg
+  ANGLE_ARM = 2  # 0xE4 STEER_CONTROL_ARM: the EPS angle loop runs only while it reads 2; sent on every frame
+  ANGLE_STEER_ACTUATOR_DELAY = 0.15  # s, the inner angle loop's lag (model value; lagd learns the rest)
 
   def __init__(self, CP):
     self.STEER_MAX = CP.lateralParams.torqueBP[-1]
@@ -80,6 +103,19 @@ class HondaFlags(IntFlag):
   # 1024 is available
   HYBRID = 2048
   BOSCH_TJA_CONTROL = 4096
+  # detected: the Accord EPS reports the angle-loop firmware (is_accord_eps_angle_loop_fw); also selects its rack map
+  EPS_ANGLE_LOOP_FW = 16777216
+
+
+# Accord EPS angle-loop firmware families: 39990-TVA,A16 (the A160 compile: A16A, A16B, A16C ...) or 39990-TVA,A34
+# (the A340 compile: A34C, A34D ...) + exactly one capital letter. The 2x torque images read 39990-TVA,A150 / ,A160 /
+# ,A340 (a digit) and stock reads 39990-TVA-A160 / -A340, so none of those matches.
+ACCORD_EPS_ANGLE_LOOP_FW_FAMILIES = (b"39990-TVA,A16", b"39990-TVA,A34")
+
+
+def is_accord_eps_angle_loop_fw(fw_version: bytes) -> bool:
+  v = fw_version.rstrip(b"\x00")  # the EPS pads fwVersion with NULs
+  return v[:-1] in ACCORD_EPS_ANGLE_LOOP_FW_FAMILIES and v[-1:].isupper()
 
 
 # Car button codes

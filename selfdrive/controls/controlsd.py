@@ -10,6 +10,7 @@ from openpilot.common.realtime import config_realtime_process, DT_CTRL, Priority
 from openpilot.common.swaglog import cloudlog
 
 from opendbc.car.car_helpers import interfaces
+from opendbc.car.honda.steer_ratio import vgr_physical_to_linear
 from opendbc.car.vehicle_model import VehicleModel
 from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
@@ -59,6 +60,8 @@ class Controls:
       self.LaC = LatControlPID(self.CP, self.CI, DT_CTRL)
     elif self.CP.lateralTuning.which() == 'torque':
       self.LaC = LatControlTorque(self.CP, self.CI, DT_CTRL)
+    # the angle controller's rack map (Accord angle-loop EPS), None on every other car
+    self.vgr_inverse = self.LaC.vgr_inverse if isinstance(self.LaC, LatControlAngle) else None
 
     # dp - ALKA: cache enabled state (CP doesn't change after init)
     self.alka_enabled = bool(self.CP.alternativeExperience & ALTERNATIVE_EXPERIENCE.ALKA)
@@ -89,7 +92,8 @@ class Controls:
     sr = max(lp.steerRatio, 0.1)
     self.VM.update_params(x, sr)
 
-    steer_angle_without_offset = math.radians(CS.steeringAngleDeg - lp.angleOffsetDeg)
+    # back through the angle controller's rack map (if any), so a seeded curvature comes back as the same angle
+    steer_angle_without_offset = math.radians(vgr_physical_to_linear(CS.steeringAngleDeg - lp.angleOffsetDeg, self.vgr_inverse))
     self.curvature = -self.VM.calc_curvature(steer_angle_without_offset, CS.vEgo, lp.roll)
 
     model_v2 = self.sm['modelV2']

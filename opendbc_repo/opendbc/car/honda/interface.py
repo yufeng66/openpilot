@@ -5,7 +5,9 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.disable_ecu import disable_ecu
 from opendbc.car.honda.hondacan import CanBus
 from opendbc.car.honda.values import CarControllerParams, HondaFlags, CAR, HONDA_BOSCH, HONDA_BOSCH_CANFD, \
-                                                 HONDA_NIDEC_ALT_SCM_MESSAGES, HONDA_BOSCH_RADARLESS, HondaSafetyFlags
+                                                 HONDA_NIDEC_ALT_SCM_MESSAGES, HONDA_BOSCH_RADARLESS, HondaSafetyFlags, \
+                                                 is_accord_eps_angle_loop_fw
+from opendbc.car.honda.steer_ratio import ACCORD_ANGLE_LOOP_STEER_RATIO
 from opendbc.car.honda.carcontroller import CarController
 from opendbc.car.honda.carstate import CarState
 from opendbc.car.honda.radar_interface import RadarInterface
@@ -101,6 +103,19 @@ class CarInterface(CarInterfaceBase):
         # ret.dashcamOnly = True
         eps_modified = True
 
+    # The Accord angle-loop EPS firmware is a comma image too, but not a torque-mod one: it never takes eps_modified.
+    # It is accepted only on the Accord, only at the standard EPS address, and only if every EPS image reported
+    # matches the family (logging-only queries are not firmware images). Any other case with an angle-loop image
+    # is inconsistent: no steering control.
+    eps_observations = [fw for fw in car_fw if fw.ecu == "eps" and not fw.logging]
+    eps_angle_loop_seen = any(is_accord_eps_angle_loop_fw(fw.fwVersion) for fw in eps_observations)
+    eps_angle_loop = candidate == CAR.HONDA_ACCORD and eps_angle_loop_seen and all(
+      fw.address == 0x18DA30F1 and fw.subAddress == 0 and is_accord_eps_angle_loop_fw(fw.fwVersion) for fw in eps_observations)
+    if eps_angle_loop:
+      eps_modified = False
+    elif eps_angle_loop_seen:
+      ret.dashcamOnly = True
+
     if candidate == CAR.HONDA_CIVIC:
       if eps_modified:
         # stock request input values:     0x0000, 0x00DE, 0x014D, 0x01EF, 0x0290, 0x0377, 0x0454, 0x0610, 0x06EE
@@ -130,6 +145,16 @@ class CarInterface(CarInterfaceBase):
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 4096], [0, 4096]]  # TODO: determine if there is a dead zone at the top end
       if eps_modified:
         ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.3], [0.09]]
+      elif eps_angle_loop:
+        # the EPS closes the angle loop, openpilot sends the setpoint (LatControlAngle). The PID tune is unused; it
+        # keeps the torque learner and the torque controller extensions off (they key on lateralTuning == torque).
+        ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.6], [0.18]]
+        ret.flags |= HondaFlags.EPS_ANGLE_LOOP_FW.value
+        ret.steerControlType = structs.CarParams.SteerControlType.angle
+        ret.steerActuatorDelay = CarControllerParams.ANGLE_STEER_ACTUATOR_DELAY
+        ret.steerRatio = ACCORD_ANGLE_LOOP_STEER_RATIO
+        # the onroad torque bar divides by this; the torque fit's value means nothing to an angle setpoint
+        ret.maxLateralAccel = CarControllerParams.ANGLE_LIMITS.MAX_LATERAL_ACCEL
       else:
         # dp: torque tuning on the stock EPS (comma's params.toml fit, upstream PID was kp 0.6 / ki 0.18)
         # so the torque learner and the speed-dependent learner (dp_lat_torqued_sd) run on this car.

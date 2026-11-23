@@ -1,6 +1,7 @@
 import math
 
 from cereal import log
+from opendbc.car.honda.steer_ratio import get_honda_vgr_inverse, vgr_linear_to_physical
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 
 # TODO This is speed dependent
@@ -11,7 +12,10 @@ class LatControlAngle(LatControl):
   def __init__(self, CP, CI, dt):
     super().__init__(CP, CI, dt)
     self.sat_check_min_speed = 5.
-    self.use_steer_limited_by_safety = CP.brand in ("tesla", "hyundai")
+    # honda (angle-loop EPS): the EPS angle loop lags 0.3-0.6 s, so the raw angle-error rule would flag ordinary turn entries
+    self.use_steer_limited_by_safety = CP.brand in ("tesla", "hyundai", "honda")
+    # CP.flags bits are per brand; None (no variable-ratio rack map) leaves the angle as VehicleModel gives it
+    self.vgr_inverse = get_honda_vgr_inverse(CP.flags) if CP.brand == "honda" else None
 
   def update(self, active, CS, VM, params, steer_limited_by_safety, desired_curvature, curvature_limited, lat_delay):
     angle_log = log.ControlsState.LateralAngleState.new_message()
@@ -22,6 +26,8 @@ class LatControlAngle(LatControl):
     else:
       angle_log.active = True
       angle_steers_des = math.degrees(VM.get_steer_from_curvature(-desired_curvature, CS.vEgo, params.roll))
+      # VehicleModel's angle is centre-equivalent (one steer ratio); the EPS takes the angle it publishes
+      angle_steers_des = vgr_linear_to_physical(angle_steers_des, self.vgr_inverse)
       angle_steers_des += params.angleOffsetDeg
 
     if self.use_steer_limited_by_safety:

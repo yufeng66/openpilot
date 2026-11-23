@@ -434,6 +434,18 @@ class TestHondaBoschSafetyBase(HondaBase):
     self.safety.set_controls_allowed(1)
     self.assertTrue(self._tx(self._button_msg(Btn.RESUME, bus=self.BUTTONS_BUS)))
 
+  def test_angle_loop_steer_safety_check(self):
+    # Accord angle-loop EPS frame: STEER_CONTROL_ARM (byte 2) is not checked, the setpoint (bytes 0-1) is the
+    # only part bound to controls_allowed, as the torque field is
+    for setpoint in (-4096, -1234, -1, 1, 1234, 4095):
+      for allowed in (False, True):
+        self.safety.set_controls_allowed(allowed)
+        msg = self.packer.make_can_msg_safety("STEERING_CONTROL", self.STEER_BUS,
+                                              {"STEER_TORQUE": setpoint, "STEER_TORQUE_REQUEST": 1, "STEER_CONTROL_ARM": 2})
+        self.assertEqual(allowed, self._tx(msg))
+        idle = self.packer.make_can_msg_safety("STEERING_CONTROL", self.STEER_BUS, {"STEER_CONTROL_ARM": 2})
+        self.assertTrue(self._tx(idle))
+
 
 class TestHondaBoschAltBrakeSafetyBase(TestHondaBoschSafetyBase):
   """

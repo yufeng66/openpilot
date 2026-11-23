@@ -1,3 +1,4 @@
+import math
 import numpy as np
 
 from opendbc.can import CANPacker
@@ -6,9 +7,12 @@ from opendbc.car.honda import hondacan
 from opendbc.car.honda.values import CAR, CruiseButtons, HONDA_BOSCH, HONDA_BOSCH_CANFD, HONDA_BOSCH_RADARLESS, \
                                      HONDA_BOSCH_TJA_CONTROL, HONDA_NIDEC_ALT_PCM_ACCEL, CarControllerParams
 from opendbc.car.interfaces import CarControllerBase
+from opendbc.car.lateral import apply_steer_angle_limits_vm
+from opendbc.car.vehicle_model import VehicleModel
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
 LongCtrlState = structs.CarControl.Actuators.LongControlState
+SteerControlType = structs.CarParams.SteerControlType
 
 
 def compute_gb_honda_bosch(accel, speed):
@@ -109,6 +113,30 @@ class CarController(CarControllerBase):
     self.brake = 0.0
     self.last_torque = 0.0
 
+    # Accord angle-loop EPS (interface.py sets steerControlType = angle)
+    self.angle_mode = CP.steerControlType == SteerControlType.angle
+    self.VM = VehicleModel(CP) if self.angle_mode else None
+    self.apply_angle_last = None  # None until the first frame seeds the limiter from the wheel
+
+  def _update_angle(self, CC, CS) -> tuple[float, int]:
+    """Angle setpoint (deg) and the 0xE4 STEER_TORQUE field."""
+    p = self.params
+    steering_angle = float(CS.out.steeringAngleDeg)
+    angle_last = steering_angle if self.apply_angle_last is None else self.apply_angle_last
+    self.apply_angle_last = apply_steer_angle_limits_vm(CC.actuators.steeringAngleDeg, angle_last, CS.out.vEgoRaw,
+                                                        steering_angle, CC.latActive, p, self.VM)
+    if not CC.latActive:
+      # the frame carries no setpoint while idle (the panda would drop a nonzero one): the field is 0
+      return self.apply_angle_last, 0
+    # error clip: a pure bound on what is sent, never stored back into the limiter state (a clipped value re-seeding
+    # the limiter would feed the wheel's motion into the next frame's setpoint)
+    error_max = float(np.interp(CS.out.vEgoRaw, p.ANGLE_ERROR_MAX_BP, p.ANGLE_ERROR_MAX_V))
+    apply_angle = float(np.clip(self.apply_angle_last, steering_angle - error_max, steering_angle + error_max))
+    # around a wheel past the setpoint limit the error clip lies outside it: the limit wins, and is what gets reported
+    apply_angle = float(np.clip(apply_angle, -p.ANGLE_LIMITS.STEER_ANGLE_MAX, p.ANGLE_LIMITS.STEER_ANGLE_MAX))
+    # raw = round(-10 * deg), half-up; left-positive degrees are negative raw
+    return apply_angle, math.floor(-10.0 * apply_angle + 0.5)
+
   def update(self, CC, CS, now_nanos):
     actuators = CC.actuators
     hud_control = CC.hudControl
@@ -123,8 +151,13 @@ class CarController(CarControllerBase):
       gas, brake = 0.0, 0.0
 
     # *** rate limit steer ***
-    limited_torque = rate_limit(actuators.torque, self.last_torque, -self.params.STEER_DELTA_DOWN * DT_CTRL,
-                                self.params.STEER_DELTA_UP * DT_CTRL)
+    if self.angle_mode:
+      # the angle setpoint takes the place of the torque command in the 0xE4 STEER_TORQUE field
+      apply_angle, apply_torque = self._update_angle(CC, CS)
+      limited_torque = 0.0
+    else:
+      limited_torque = rate_limit(actuators.torque, self.last_torque, -self.params.STEER_DELTA_DOWN * DT_CTRL,
+                                  self.params.STEER_DELTA_UP * DT_CTRL)
     self.last_torque = limited_torque
 
     # *** apply brake hysteresis ***
@@ -140,8 +173,9 @@ class CarController(CarControllerBase):
     # **** process the car messages ****
 
     # steer torque is converted back to CAN reference (positive when steering right)
-    apply_torque = int(np.interp(-limited_torque * self.params.STEER_MAX,
-                                 self.params.STEER_LOOKUP_BP, self.params.STEER_LOOKUP_V))
+    if not self.angle_mode:
+      apply_torque = int(np.interp(-limited_torque * self.params.STEER_MAX,
+                                   self.params.STEER_LOOKUP_BP, self.params.STEER_LOOKUP_V))
 
     # Send CAN commands
     can_sends = []
@@ -152,7 +186,8 @@ class CarController(CarControllerBase):
         can_sends.append(make_tester_present_msg(0x18DAB0F1, 1, suppress_response=True))
 
     # Send steering command.
-    can_sends.append(hondacan.create_steering_control(self.packer, self.CAN, apply_torque, CC.latActive, self.tja_control))
+    can_sends.append(hondacan.create_steering_control(self.packer, self.CAN, apply_torque, CC.latActive, self.tja_control,
+                                                      angle_arm=self.params.ANGLE_ARM if self.angle_mode else None))
 
     # wind brake from air resistance decel at high speed
     wind_brake = np.interp(CS.out.vEgo, [0.0, 2.3, 35.0], [0.001, 0.002, 0.15])
@@ -245,6 +280,8 @@ class CarController(CarControllerBase):
     new_actuators.brake = self.brake
     new_actuators.torque = self.last_torque
     new_actuators.torqueOutputCan = apply_torque
+    if self.angle_mode:
+      new_actuators.steeringAngleDeg = apply_angle
 
     self.frame += 1
     return new_actuators, can_sends

@@ -418,6 +418,38 @@ class TestALKAHondaBosch(TestALKABase):
     """Honda Bosch should have alka_allowed set to true."""
     self.assertTrue(self.safety.get_alka_allowed())
 
+  def test_alka_angle_loop_steer(self):
+    """Accord angle-loop EPS frame (STEER_CONTROL_ARM = 2): the setpoint passes only while ALKA allows lateral control."""
+    counter = 0
+
+    def pt(main_on, speed):
+      # SCM_FEEDBACK and ENGINE_DATA on the Bosch powertrain bus (1), with a running counter
+      nonlocal counter
+      for _ in range(6):
+        self._rx(self.packer.make_can_msg_safety("SCM_FEEDBACK", 1, {"MAIN_ON": main_on, "COUNTER": counter % 4}))
+        self._rx(self.packer.make_can_msg_safety("ENGINE_DATA", 1, {"XMISSION_SPEED": speed * 3.6, "COUNTER": counter % 4}))
+        counter += 1
+
+    def steer(setpoint):
+      values = {"STEER_TORQUE": setpoint, "STEER_TORQUE_REQUEST": setpoint != 0, "STEER_CONTROL_ARM": 2}
+      return self._tx(self.packer.make_can_msg_safety("STEERING_CONTROL", 0, values))
+
+    self.safety.set_controls_allowed(False)
+    pt(1, 10.0)
+    self.assertTrue(self.safety.get_lat_control_allowed())
+    self.assertTrue(steer(-1234))
+    self.assertTrue(steer(0))
+
+    pt(1, 0.0)  # standstill
+    self.assertFalse(self.safety.get_lat_control_allowed())
+    self.assertFalse(steer(-1234))
+    self.assertTrue(steer(0))
+
+    pt(0, 10.0)  # main off
+    self.assertFalse(self.safety.get_lat_control_allowed())
+    self.assertFalse(steer(-1234))
+    self.assertTrue(steer(0))
+
 
 class TestALKAHyundaiCanfd(TestALKABase):
   """Test ALKA functionality for Hyundai CAN-FD (Main only tracking)."""
