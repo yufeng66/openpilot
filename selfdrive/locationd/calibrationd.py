@@ -42,10 +42,7 @@ if HARDWARE.get_device_type() == 'mici':
   PITCH_LIMITS = np.array([-0.143101, 0.22235988])
 else:
   PITCH_LIMITS = np.array([-0.09074112085129739, 0.17])
-# Stock yaw limit is +-3.96 deg (0.0691 rad). Widened to +-5.0 deg as a trial for the Accord mount, which sits at
-# ~4.7 deg. Past ~4.3 deg the model frame runs off the edge of the C3 narrow cam, so the warp edge-pads the outermost
-# model columns (about 7 of 512 at 4.7 deg).
-YAW_LIMITS = np.radians([-5.0, 5.0])
+YAW_LIMITS = np.array([-0.06912048084718224, 0.06912048084718235])
 DEBUG = os.getenv("DEBUG") is not None
 
 
