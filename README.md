@@ -1,3 +1,26 @@
+# 個人分支：適用於 2019 Accord Hybrid 與 2020 RAV4 Hybrid
+
+[Read this in English](README_EN.md)
+
+這是以 [dragonpilot](https://github.com/dragonpilot/dragonpilot) 為基礎的個人分支，不是 dragonpilot 的官方版本。它是為兩台搭配 comma three (C3) 的車所做的，屬於實驗性質，請自行承擔使用風險。這些修改是在 Anthropic 的 AI 模型 [Claude](https://claude.com/product/overview) 協助下完成的。
+
+**2020 Toyota RAV4 Hybrid**
+
+- **Speed-Dependent Torque Learner**：學習車子在不同車速下需要多少轉向力道，讓轉向更平順。另外附有 **Friction Reduction** 設定。構想來自 [zephleggett 為 sunnypilot 所做的成果](https://github.com/sunnypilot/sunnypilot/pull/1776)。
+- **Lateral Jerk Torque Controller**：來自 [sunnypilot](https://github.com/sunnypilot/sunnypilot)，原作者是 [twilsonco](https://github.com/twilsonco)。
+
+**2019 Honda Accord Hybrid**
+
+- 上面的轉向設定在這台車上也可以使用。
+- **Use Camera Objects for the Lead Car (Experimental)**：讀取原廠攝影機的物體清單，取得更準確的前車距離與速度。僅適用於原廠 ACC。參考了 [JamesL787](https://github.com/JamesL787) 在 [StarPilot](https://github.com/StarPilotHQ/StarPilot) 的成果，以及 [trung791997](https://github.com/trung791997/openpilot/tree/ns-bosch-radar-testing) 的成果。
+- **「Rel+Gap」前車資訊**：在前車標記下方顯示與前車的速度差，以及以秒計算的車距。
+- **畫面**：車速與引擎轉速顯示在左側，駕駛監控圖示在右下角。
+- **改裝的「6x」轉向 (EPS) 韌體**：支援程式移植自 [Biscuit-Labs](https://github.com/Biscuit-Labs/openpilot/tree/Honda-PTM-Testing)，尚未實際上路測試。
+
+新增的設定預設都是關閉的，可以在裝置上的 dragonpilot 設定中找到。
+
+------------------------------------------------------------------------------------------
+
 ![](dragonpilot/selfdrive/assets/dragonpilot.png)
 
 [Read this in English](README_EN.md)

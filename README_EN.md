@@ -1,3 +1,26 @@
+# Personal branch for a 2019 Accord Hybrid and a 2020 RAV4 Hybrid
+
+[中文說明](README.md)
+
+This is a personal branch based on [dragonpilot](https://github.com/dragonpilot/dragonpilot). It is not an official dragonpilot release. It is made for two cars with a comma three (C3), and it is experimental: use it at your own risk. The changes were made with the help of [Claude](https://claude.com/product/overview), the AI model from Anthropic.
+
+**2020 Toyota RAV4 Hybrid**
+
+- **Speed-Dependent Torque Learner**: learns how much steering force the car needs at each speed, for smoother steering. It comes with a **Friction Reduction** setting. The idea comes from [zephleggett's work for sunnypilot](https://github.com/sunnypilot/sunnypilot/pull/1776).
+- **Lateral Jerk Torque Controller**: from [sunnypilot](https://github.com/sunnypilot/sunnypilot), first written by [twilsonco](https://github.com/twilsonco).
+
+**2019 Honda Accord Hybrid**
+
+- The steering settings above also work on this car.
+- **Use Camera Objects for the Lead Car (Experimental)**: reads the object list of the car's own camera for a more exact distance and speed of the car ahead. Stock ACC only. Based on the work of [JamesL787](https://github.com/JamesL787) in [StarPilot](https://github.com/StarPilotHQ/StarPilot) and of [trung791997](https://github.com/trung791997/openpilot/tree/ns-bosch-radar-testing).
+- **"Rel+Gap" lead readout**: shows the speed difference to the car ahead and the gap in seconds, under the lead marker.
+- **Screen**: speed and engine RPM are on the left side, and the driver monitor icon is at the bottom right.
+- **Modified "6x" steering (EPS) firmware**: support ported from [Biscuit-Labs](https://github.com/Biscuit-Labs/openpilot/tree/Honda-PTM-Testing). Not yet tested on the road.
+
+The new settings are off by default. You find them in the dragonpilot settings on the device.
+
+------------------------------------------------------------------------------------------
+
 ![](dragonpilot/selfdrive/assets/dragonpilot.png)
 
 [Read this in Chinese](README.md)
