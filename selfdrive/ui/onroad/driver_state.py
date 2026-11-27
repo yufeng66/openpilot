@@ -162,10 +162,10 @@ class DriverStateRenderer(Widget):
 
   def _pre_calculate_drawing_elements(self):
     """Pre-calculate all drawing elements based on the current rectangle"""
-    # Calculate icon position (bottom-left or bottom-right)
+    # dp - icon position: always bottom-right, because the engine RPM is drawn at the bottom left
     width, height = self._rect.width, self._rect.height
     offset = UI_BORDER_SIZE + BTN_SIZE // 2
-    self.position_x = self._rect.x + (width - offset if self.is_rhd else offset)
+    self.position_x = self._rect.x + width - offset
     self.position_y = self._rect.y + height - offset
 
     # Pre-calculate the face lines positions

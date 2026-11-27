@@ -165,6 +165,9 @@ class CarState(CarStateBase):
       ret.gearShifter = self.parse_gear_shifter(gear_position)
 
     ret.gasPressed = cp.vl["POWERTRAIN_DATA"]["PEDAL_GAS"] > 1e-5
+    # dp - display only. ENGINE_DATA.ENGINE_RPM reads 0 on hybrids, POWERTRAIN_DATA has the real value (0 in EV mode).
+    # The field keeps its upstream name so that car.capnp stays identical to upstream.
+    ret.engineRpmDEPRECATED = cp.vl["POWERTRAIN_DATA"]["ENGINE_RPM"]
 
     ret.steeringTorque = cp.vl["STEER_STATUS"]["STEER_TORQUE_SENSOR"]
     ret.steeringPressed = abs(ret.steeringTorque) > STEER_THRESHOLD.get(self.CP.carFingerprint, 1200)

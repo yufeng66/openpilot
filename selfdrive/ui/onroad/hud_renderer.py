@@ -14,6 +14,13 @@ SET_SPEED_NA = 255
 KM_TO_MILE = 0.621371
 CRUISE_DISABLED_CHAR = '–'
 
+# dp - left column layout (speed under the MAX box, engine RPM at the bottom), offsets from the HUD rect
+LEFT_COLUMN_MIN_X = 16  # a text too wide to centre on the column starts here
+SPEED_UNIT_OFFSET_Y = 110  # unit centre below the speed number centre
+ENGINE_RPM_OFFSET_Y = 146  # RPM number centre above the rect bottom
+ENGINE_RPM_UNIT_OFFSET_Y = 70  # RPM unit centre above the rect bottom
+ENGINE_RPM_OFF = 50  # below this the engine is off (the text would read 0.0)
+
 
 @dataclass(frozen=True)
 class UIConfig:
@@ -32,6 +39,8 @@ class FontSizes:
   speed_unit: int = 66
   max_speed: int = 40
   set_speed: int = 90
+  engine_rpm: int = 120  # dp
+  engine_rpm_unit: int = 46  # dp
 
 
 @dataclass(frozen=True)
@@ -47,6 +56,7 @@ class Colors:
   DARK_GREY = rl.Color(114, 114, 114, 255)
   BLACK_TRANSLUCENT = rl.Color(0, 0, 0, 166)
   WHITE_TRANSLUCENT = rl.Color(255, 255, 255, 200)
+  ENGINE_OFF = rl.Color(255, 255, 255, 115)  # dp
   BORDER_TRANSLUCENT = rl.Color(255, 255, 255, 75)
   HEADER_GRADIENT_START = rl.Color(0, 0, 0, 114)
   HEADER_GRADIENT_END = rl.BLANK
@@ -66,6 +76,7 @@ class HudRenderer(Widget):
     self.set_speed: float = SET_SPEED_NA
     self.speed: float = 0.0
     self.v_ego_cluster_seen: bool = False
+    self.engine_rpm: float = 0.0  # dp
 
     self._font_semi_bold: rl.Font = gui_app.font(FontWeight.SEMI_BOLD)
     self._font_bold: rl.Font = gui_app.font(FontWeight.BOLD)
@@ -82,6 +93,7 @@ class HudRenderer(Widget):
       self.is_cruise_set = False
       self.set_speed = SET_SPEED_NA
       self.speed = 0.0
+      self.engine_rpm = 0.0  # dp
       return
 
     controls_state = sm['controlsState']
@@ -103,6 +115,9 @@ class HudRenderer(Widget):
     speed_conversion = CV.MS_TO_KPH if ui_state.is_metric else CV.MS_TO_MPH
     self.speed = max(0.0, v_ego * speed_conversion)
 
+    # dp - the Honda car state fills this field; it keeps its upstream name so that car.capnp stays untouched
+    self.engine_rpm = max(0.0, car_state.engineRpmDEPRECATED)
+
   def _render(self, rect: rl.Rectangle) -> None:
     """Render HUD elements to the screen."""
     # Draw the header background
@@ -119,6 +134,10 @@ class HudRenderer(Widget):
       self._draw_set_speed(rect)
 
     self._draw_current_speed(rect)
+
+    # dp - only the Honda car state fills engineRpm
+    if ui_state.CP is not None and ui_state.CP.brand == "honda":
+      self._draw_engine_rpm(rect)
 
     button_x = rect.x + rect.width - UI_CONFIG.border_size - UI_CONFIG.button_size
     button_y = rect.y + UI_CONFIG.border_size
@@ -173,14 +192,36 @@ class HudRenderer(Widget):
       set_speed_color,
     )
 
+  def _left_column_x(self, rect: rl.Rectangle, text_width: float) -> float:
+    """dp - left edge of a text centred on the MAX box column, shifted right if it would pass the rect edge."""
+    center_x = rect.x + 60 + UI_CONFIG.set_speed_width_imperial / 2
+    return max(rect.x + LEFT_COLUMN_MIN_X, center_x - text_width / 2)
+
   def _draw_current_speed(self, rect: rl.Rectangle) -> None:
     """Draw the current vehicle speed and unit."""
+    # dp - left column under the MAX box, number centred at mid-height (the mirror hides the top centre)
+    speed_center_y = rect.y + rect.height / 2
     speed_text = str(round(self.speed))
     speed_text_size = measure_text_cached(self._font_bold, speed_text, FONT_SIZES.current_speed)
-    speed_pos = rl.Vector2(rect.x + rect.width / 2 - speed_text_size.x / 2, 180 - speed_text_size.y / 2)
+    speed_pos = rl.Vector2(self._left_column_x(rect, speed_text_size.x), speed_center_y - speed_text_size.y / 2)
     rl.draw_text_ex(self._font_bold, speed_text, speed_pos, FONT_SIZES.current_speed, 0, COLORS.WHITE)
 
     unit_text = tr("km/h") if ui_state.is_metric else tr("mph")
     unit_text_size = measure_text_cached(self._font_medium, unit_text, FONT_SIZES.speed_unit)
-    unit_pos = rl.Vector2(rect.x + rect.width / 2 - unit_text_size.x / 2, 290 - unit_text_size.y / 2)
+    unit_pos = rl.Vector2(self._left_column_x(rect, unit_text_size.x), speed_center_y + SPEED_UNIT_OFFSET_Y - unit_text_size.y / 2)
     rl.draw_text_ex(self._font_medium, unit_text, unit_pos, FONT_SIZES.speed_unit, 0, COLORS.WHITE_TRANSLUCENT)
+
+  def _draw_engine_rpm(self, rect: rl.Rectangle) -> None:
+    """dp - draw the engine RPM at the bottom of the left column, dimmed while the engine is off."""
+    rpm_text = f"{self.engine_rpm / 1000:.1f}"
+    rpm_color = COLORS.WHITE if self.engine_rpm >= ENGINE_RPM_OFF else COLORS.ENGINE_OFF
+    rpm_text_size = measure_text_cached(self._font_bold, rpm_text, FONT_SIZES.engine_rpm)
+    rpm_center_y = rect.y + rect.height - ENGINE_RPM_OFFSET_Y
+    rpm_pos = rl.Vector2(self._left_column_x(rect, rpm_text_size.x), rpm_center_y - rpm_text_size.y / 2)
+    rl.draw_text_ex(self._font_bold, rpm_text, rpm_pos, FONT_SIZES.engine_rpm, 0, rpm_color)
+
+    unit_text = "krpm"
+    unit_text_size = measure_text_cached(self._font_medium, unit_text, FONT_SIZES.engine_rpm_unit)
+    unit_center_y = rect.y + rect.height - ENGINE_RPM_UNIT_OFFSET_Y
+    unit_pos = rl.Vector2(self._left_column_x(rect, unit_text_size.x), unit_center_y - unit_text_size.y / 2)
+    rl.draw_text_ex(self._font_medium, unit_text, unit_pos, FONT_SIZES.engine_rpm_unit, 0, COLORS.WHITE_TRANSLUCENT)
