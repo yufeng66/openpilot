@@ -2,7 +2,7 @@ settings:
   - key: dp_ui_lead
     type: text_spin_button_item
     title: "Display Lead Stats"
-    description: "Display the statistics of lead car and/or radar tracking points.<br>Lead: Lead stats only<br>Radar: Radar tracking point stats only<br>All: Lead and Radar stats<br>NOTE: Radar option only works on certain vehicle models."
+    description: "Display the statistics of lead car and/or radar tracking points.<br>Lead: Lead stats only<br>Radar: Radar tracking point stats only<br>All: Lead and Radar stats<br>Rel+Gap: one line under the lead car, its speed minus yours and the time gap in seconds (dimmed when only the camera sees it)<br>NOTE: Radar option only works on certain vehicle models."
     category: "UI"
     condition: "not MICI"
     default: 0
@@ -11,5 +11,6 @@ settings:
       - "Lead"
       - "Radar"
       - "All"
+      - "Rel+Gap"
     flags: PERSISTENT
     param_type: INT

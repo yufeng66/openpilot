@@ -11,6 +11,7 @@ from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.lib.shader_polygon import draw_polygon, Gradient
 from openpilot.system.ui.widgets import Widget
+from dragonpilot.selfdrive.ui import lead_readout  # dp
 
 CLIP_MARGIN = 500
 MIN_DRAW_DISTANCE = 10.0
@@ -53,6 +54,7 @@ class LeadVehicle:
   x: float = 0.0
   y: float = 0.0
   sz: float = 0.0
+  radar: bool = False
 
 @dataclass
 class DpUiLeadMode:
@@ -60,6 +62,11 @@ class DpUiLeadMode:
   lead = 1
   radar = 2
   all = 3
+  rel_gap = 4
+
+
+# dp - modes that write text under the lead marker; they also draw the marker with stock ACC
+DP_UI_LEAD_TEXT_MODES = (DpUiLeadMode.lead, DpUiLeadMode.all, DpUiLeadMode.rel_gap)
 
 
 class ModelRenderer(Widget):
@@ -130,7 +137,7 @@ class ModelRenderer(Widget):
     model = sm['modelV2']
     radar_state = sm['radarState'] if sm.valid['radarState'] else None
     lead_one = radar_state.leadOne if radar_state else None
-    render_lead_indicator = self._longitudinal_control and radar_state is not None
+    render_lead_indicator = (self._longitudinal_control or ui_state.dp_ui_lead in DP_UI_LEAD_TEXT_MODES) and radar_state is not None  # dp
 
     # Update model data when needed
     model_updated = sm.updated['modelV2']
@@ -187,6 +194,7 @@ class ModelRenderer(Widget):
         point = self._map_to_screen(d_rel, -y_rel, z + self._path_offset_z)
         if point:
           self._lead_vehicles[i] = self._update_lead_vehicle(d_rel, v_rel, point, self._rect)
+          self._lead_vehicles[i].radar = bool(lead_data.radar)  # dp
 
   def _update_model(self, lead, path_x_array):
     """Update model visualization data based on model message"""
@@ -361,6 +369,14 @@ class ModelRenderer(Widget):
         if ttc < 5.:
           ttc_str = f"{ttc:.1f}s"
           self._dp_paint_centered_lead_text(ttc_str, 80, lead.x, start_y + lead.sz + 40)
+
+    # dp - Rel+Gap: one line under the marker; lead two only if it is not drawn on top of lead one
+    if ui_state.dp_ui_lead == DpUiLeadMode.rel_gap:
+      lead_one, lead_two = self._lead_vehicles
+      if lead_one.chevron:
+        self._dp_draw_rel_gap(lead_one)
+      if lead_two.chevron and (not lead_one.chevron or abs(lead_one.d_rel - lead_two.d_rel) > 3.0):
+        self._dp_draw_rel_gap(lead_two)
 
   @staticmethod
   def _get_path_length_idx(pos_x_array: np.ndarray, path_distance: float) -> int:
@@ -545,6 +561,21 @@ class ModelRenderer(Widget):
     text_width = measure_text_cached(font, text, size).x
     text_x = x - text_width / 2
     rl.draw_text_ex(font, text, rl.Vector2(text_x, y), size, 0, rl.WHITE)
+
+  def _dp_draw_rel_gap(self, lead):
+    font = gui_app.font(FontWeight.SEMI_BOLD)
+    size = lead_readout.FONT_SIZE
+    text = lead_readout.rel_gap_text(lead.d_rel, lead.v_rel, ui_state.sm['carState'].vEgo, ui_state.is_metric)
+    text_width = measure_text_cached(font, text, size).x
+    rect = self._rect
+    # kept off the HUD's left column (MAX box, speed, RPM): lead_readout.LEFT_COLUMN_RESERVED_PX
+    x, y = lead_readout.rel_gap_text_position(lead.x, lead.y, lead.sz, text_width, rect.x, rect.y, rect.width, rect.height)
+    if not (np.isfinite(x) and np.isfinite(y)):
+      return
+    alpha = lead_readout.text_alpha(lead.radar)
+    shadow = max(2, size // 20)
+    rl.draw_text_ex(font, text, rl.Vector2(int(x) + shadow, int(y) + shadow), size, 0, rl.Color(0, 0, 0, int(lead_readout.SHADOW_ALPHA * alpha)))
+    rl.draw_text_ex(font, text, rl.Vector2(int(x), int(y)), size, 0, rl.Color(255, 255, 255, int(255 * alpha)))
 
   def _draw_live_tracks(self, sm):
     font = gui_app.font(FontWeight.NORMAL)
