@@ -28,4 +28,6 @@ class DPFlags:
   VagA0SnG = 2 ** 5
   VagAvoidEPSLockout = 2 ** 6
   HondaNidecStockLong = 2 ** 7
+  # fork-local flags count down from bit 30, so that new dragonpilot flags (counting up) do not collide at a sync
+  HondaBoschRadar = 2 ** 30  # stock camera object list as radar points (Bosch, stock ACC)
   pass

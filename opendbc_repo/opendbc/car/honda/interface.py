@@ -10,7 +10,7 @@ from opendbc.car.honda.values import CarControllerParams, HondaFlags, CAR, HONDA
 from opendbc.car.honda.steer_ratio import ACCORD_ANGLE_LOOP_STEER_RATIO
 from opendbc.car.honda.carcontroller import CarController
 from opendbc.car.honda.carstate import CarState
-from opendbc.car.honda.radar_interface import RadarInterface
+from opendbc.car.honda.radar_interface import RadarInterface, HONDA_BOSCH_OBJECT_LIST_CARS
 from opendbc.car.interfaces import CarInterfaceBase
 
 TransmissionType = structs.CarParams.TransmissionType
@@ -54,6 +54,16 @@ class CarInterface(CarInterfaceBase):
       ret.alphaLongitudinalAvailable = candidate not in HONDA_BOSCH_CANFD
       ret.openpilotLongitudinalControl = alpha_long and (candidate not in HONDA_BOSCH_CANFD)
       ret.pcmCruise = not ret.openpilotLongitudinalControl
+
+      # dp - the stock camera's object list as radar points, behind dp_honda_bosch_radar. Stock ACC only on purpose:
+      # with openpilot longitudinal the points would steer the braking, and that needs more data first (the offline
+      # analysis of 2026-11-26 saw two brief false objects). With stock ACC the car keeps gas and brake, but the lead
+      # from this source still reaches the car in two ways: longitudinalPlan.shouldStop decides the automatic RES press
+      # at standstill (controlsd cruiseControl.resume -> carcontroller RES_ACCEL), and longitudinalPlan.fcw raises
+      # openpilot's forward collision warning.
+      if dp_params & structs.DPFlags.HondaBoschRadar and candidate in HONDA_BOSCH_OBJECT_LIST_CARS and \
+         not ret.openpilotLongitudinalControl:
+        ret.radarUnavailable = False
     else:
       ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.hondaNidec)]
       ret.openpilotLongitudinalControl = True
